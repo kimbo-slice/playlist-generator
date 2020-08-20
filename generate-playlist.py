@@ -162,6 +162,8 @@ genius = lyricsgenius.Genius(client_access_token)
 from_genius()
 
 #Spotify search and match
+from_spotify()
 
 #Musicmatch search and match
+from_musicmatch()
 
