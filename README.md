@@ -2,7 +2,7 @@
 # Summary and Workflow
 Ever wanted to have a thematic playlist for every situation in life? Well here's a script for you!
 
-This playlist generating script leverages the Spotify API (via Spotipy), Genius API, and Musicmatch API to do the following:
+This playlist generating script leverages the Spotify API (via Spotipy), Genius API, and Musixmatch API to do the following:
 * Authenticate into *your* Spotify account via your browser to create a new playlist (or add to a preexisting playlist)
 * Search Genius, Spotify, and/or (Musixmatch: TODO) lyrics/song databases for songs based on a provided search term
 * Calculate the number of times your search term (or set of search terms) appears in the lyrics
