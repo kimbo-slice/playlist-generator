@@ -135,6 +135,7 @@ def from_genius() :
                         add_unique_song_to_playlist(title, artist)
         genius_page += 1
         print("Left off on {}".format(genius_page))
+        response = genius.search_genius_web(main_search, per_page=5, page=genius_page)
     print('Num added to playlist: {}'.format(len(trackIds)))
     print('Left off on genius_page: {}'.format(genius_page))
 
