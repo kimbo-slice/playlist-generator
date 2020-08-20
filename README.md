@@ -24,8 +24,8 @@ Note, the songs are added to the playlist as you go, so if you kill the program 
 
 ## Help
 As a general rule, the help command will give you information about parameters to use when executing the script
-`python3 generate-playlist.py -h`
+    python3 generate-playlist.py -h
 
 ## Basic Usage
 Let's say you want to make a playlist about, say, hotdogs. The following command will do a search for hotdogs and create a playlist called "hotdog playlist". If a playlist called "hotdog playlist" already exists in your Spotify account, it will add the songs in the search to the preexisting list
-`python3 generate-playlist.py -q hotdogs -t 'hotdog playlist'`
+    python3 generate-playlist.py -q hotdogs -t 'hotdog playlist'
