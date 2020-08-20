@@ -22,6 +22,7 @@ main_search = args.query
 threshold = args.bangerThreshold
 #If your search gets interrupted, can set the page here - mostly for debugging
 genius_page = 1
+spotify_page = 1
 
 #Genius just returns an empty set of values when it runs out of searches, so this checks for that
 #so we don't spin for a while
@@ -106,15 +107,18 @@ def get_lyrics_from_genius(title, artist) :
 
 #Given the set of track IDs in the initial playlist and those added during the search, adds
 #songs to playlist
-def add_unique_song_to_playlist(title, artist) :
+def add_unique_song_to_playlist(id) :
+    if id not in trackIds :
+        trackIds.add(id)
+        singleTrack = []
+        singleTrack.append(id)
+        sp.user_playlist_add_tracks(user=sp.me()['id'], playlist_id=playlistID, tracks=singleTrack)
+
+def get_spotify_id_from_song(title, artist) :
     spotifyTrackMatch = sp.search(q='track:{} artist:{}'.format(title, artist), type='track')
     if spotifyTrackMatch['tracks'].get('total') != 0 :
         data = spotifyTrackMatch['tracks']['items']
-        if data[0].get('id') not in trackIds :
-            trackIds.add(data[0].get('id'))
-            singleTrack = []
-            singleTrack.append(data[0].get('id'))
-            sp.user_playlist_add_tracks(user=sp.me()['id'], playlist_id=playlistID, tracks=singleTrack)
+    return data[0].get('id')
 
 #Use Genius as the search engine - can match on lyrics and song title
 def from_genius() :
@@ -132,7 +136,7 @@ def from_genius() :
                     if not is_banger(lyrics, threshold) :
                         continue
                     else :
-                        add_unique_song_to_playlist(title, artist)
+                        add_unique_song_to_playlist(get_spotify_id_from_song(title, artist))
         genius_page += 1
         print("Left off on {}".format(genius_page))
         response = genius.search_genius_web(main_search, per_page=5, page=genius_page)
@@ -142,6 +146,22 @@ def from_genius() :
 #Uses Spotify as the search engine - can match only on song title
 def from_spotify() :
     print("Adding songs from Spotify search")
+    search_response = sp.search(q='track:{}'.format(main_search), type='track')
+    global spotify_page
+    while search_response['tracks'].get('total') != 0 :
+        songs = search_response['tracks']['items']
+        for song in songs :
+            #pprint.pprint(song)
+            lyrics = get_lyrics_from_genius(song['name'], song['artists'][0]['name'])
+            if not is_banger(lyrics, threshold) :
+                continue
+            else :
+                add_unique_song_to_playlist(song['id'])
+        spotify_page+=1
+        print("Left off on {}".format(spotify_page))
+        search_response = sp.search(q='track:{}'.format(main_search), offset=spotify_page, type='track')
+    print('Num added to playlist: {}'.format(len(trackIds)))
+    print('Left off on genius_page: {}'.format(spotify_page))
 
 #Uses Musicmatch as the search engine - can match on lyrics and song title
 def from_musicmatch() :
@@ -160,7 +180,7 @@ playlistID = set_active_playlist()
 client_access_token = os.environ.get('GENIUS_TOKEN')
 genius = lyricsgenius.Genius(client_access_token)
 #Genius search and match
-from_genius()
+#from_genius()
 
 #Spotify search and match
 from_spotify()
