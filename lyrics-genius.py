@@ -4,18 +4,24 @@ from spotipy.oauth2 import SpotifyOAuth
 ##Input a search term, playlist name
 parser = argparse.ArgumentParser()
 parser.add_argument("--query", "-q", help="Search term for your playlist", required=True)
+parser.add_argument("--matches", "-m", help="Set of matches to use", nargs='*')
 parser.add_argument("--title", "-t", help="Title of your playlist")
 parser.add_argument("--lyricsMatch", "-l", help="Specify if you want to just match lyrics instead of lyrics and song title", required=False)
 parser.add_argument("--songTitleMatch", "-s", help="Specify if you want to just match song title instead of lyrics and song title", required=False)
 parser.add_argument("--playlistId", "-p", help="Specify Spotify playlist ID if you want to add to a playlist that is already created")
+parser.add_argument("--bangerThreshold", "-bt", default = 1.5, help="Percentage of searches to total set of lyrics to declare a banger")
 args = parser.parse_args()
 
 trackIds = set()
 playlistID = ""
-searches = ['graham', 'grahame', 'graeme']
+searches = args.matches
+if args.matches == None :
+    searches = [args.query]
+print("Using searches {}".format(searches))
 main_search = args.query
-threshold = 1.5
-page = 1
+threshold = args.bangerThreshold
+#If your search gets interrupted, can set the page here - mostly for debugging
+genius_page = 1
 
 #Genius just returns an empty set of values when it runs out of searches, so this checks for that
 #so we don't spin for a while
@@ -113,8 +119,8 @@ def add_unique_song_to_playlist(title, artist) :
 #Use Genius as the search engine - can match on lyrics and song title
 def from_genius() :
     print("Using GENIUS to search")
-    global page
-    response = genius.search_genius_web(main_search, per_page=5, page=page)
+    global genius_page
+    response = genius.search_genius_web(main_search, per_page=5, page=genius_page)
     while not ran_out_of_hits_genius(response) :
         hits = response['sections']
         for hit in hits :
@@ -127,10 +133,10 @@ def from_genius() :
                         continue
                     else :
                         add_unique_song_to_playlist(title, artist)
-        page += 1
-        print("Left off on {}".format(page))
+        genius_page += 1
+        print("Left off on {}".format(genius_page))
     print('Num added to playlist: {}'.format(len(trackIds)))
-    print('Left off on page: {}'.format(page))
+    print('Left off on genius_page: {}'.format(genius_page))
 
 #Uses Spotify as the search engine - can match only on song title
 def from_spotify() :
