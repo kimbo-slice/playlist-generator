@@ -10,6 +10,8 @@ parser.add_argument("--lyricsMatch", "-l", help="Specify if you want to just mat
 parser.add_argument("--songTitleMatch", "-s", help="Specify if you want to just match song title instead of lyrics and song title", required=False)
 parser.add_argument("--playlistId", "-p", help="Specify Spotify playlist ID if you want to add to a playlist that is already created")
 parser.add_argument("--bangerThreshold", "-bt", default = 1.5, help="Percentage of searches to total set of lyrics to declare a banger")
+parser.add_argument("--spotify", "-sp", default=True, help="Search using Spotify")
+parser.add_argument("--genius", "-g", default=False, help="Search using Genius")
 args = parser.parse_args()
 
 trackIds = set()
@@ -108,7 +110,7 @@ def get_lyrics_from_genius(title, artist) :
 #Given the set of track IDs in the initial playlist and those added during the search, adds
 #songs to playlist
 def add_unique_song_to_playlist(id) :
-    if id not in trackIds :
+    if id not in trackIds and not id == 0:
         trackIds.add(id)
         singleTrack = []
         singleTrack.append(id)
@@ -118,7 +120,9 @@ def get_spotify_id_from_song(title, artist) :
     spotifyTrackMatch = sp.search(q='track:{} artist:{}'.format(title, artist), type='track')
     if spotifyTrackMatch['tracks'].get('total') != 0 :
         data = spotifyTrackMatch['tracks']['items']
-    return data[0].get('id')
+        return data[0].get('id')
+    else :
+        return 0
 
 #Use Genius as the search engine - can match on lyrics and song title
 def from_genius() :
@@ -180,10 +184,12 @@ playlistID = set_active_playlist()
 client_access_token = os.environ.get('GENIUS_TOKEN')
 genius = lyricsgenius.Genius(client_access_token)
 #Genius search and match
-#from_genius()
+if args.genius :
+    from_genius()
 
 #Spotify search and match
-from_spotify()
+if args.spotify :
+    from_spotify()
 
 #Musicmatch search and match
 from_musicmatch()
