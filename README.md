@@ -28,6 +28,6 @@ As a general rule, the help command will give you information about parameters t
     python3 generate-playlist.py -h
 
 ## Basic Usage
-Let's say you want to make a playlist about, say, hotdogs. The following command will do a search for hotdogs and create a playlist called "hotdog playlist". If a playlist called "hotdog playlist" already exists in your Spotify account, it will add the songs in the search to the preexisting list
+Let's say you want to make a playlist about, say, hotdogs. The following command will do a search for hotdogs and create a playlist called "hotdog playlist". If a playlist called "hotdog playlist" already exists in your Spotify account, it will add the songs from the search to the preexisting list. There is some logic that prevents duplicates, but if there is a song that exists by the same artist on multiple albums (ie - same song with multiple Spotify song IDs), duplicates can happen
 
     python3 generate-playlist.py -q hotdogs -t 'hotdog playlist'
