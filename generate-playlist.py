@@ -122,6 +122,8 @@ def add_unique_song_to_playlist(id) :
             sp.user_playlist_add_tracks(user=sp.me()['id'], playlist_id=playlistID, tracks=singleTrack)
         except :
             print("error addding song to list :(")
+    else :
+        print("Song already in tracks")
 
 def get_spotify_id_from_song(title, artist) :
     try :
@@ -142,19 +144,19 @@ def from_genius() :
     response = genius.search_songs(main_search, per_page=5, page=genius_page)#search_genius_web(main_search, per_page=5, page=genius_page)
     while not ran_out_of_hits_genius(response) :
         hits = response['hits']
-        for song in hits :
-            if (song['index'] == 'lyric' and not args.songTitleMatch) or (song['index'] == 'song' and not args.lyricsMatch) :
-                title = song['result']['title']
-                artist = song['result']['primary_artist']['name']
-                lyrics = get_lyrics_from_genius(title, artist)
-                if not is_banger(lyrics, threshold) :
+        for hit in hits :
+            title=hit['result']['title']
+            artist=hit['result']['primary_artist'].get('name')
+            song = genius.search_song(title=title, artist=artist)
+            lyrics = song.lyrics
+            if not is_banger(lyrics, threshold) :
                     continue
-                else :
-                    add_unique_song_to_playlist(get_spotify_id_from_song(title, artist))
+            else :
+                 add_unique_song_to_playlist(get_spotify_id_from_song(title, artist))
         genius_page += 1
         print("Left off on {}".format(genius_page))
         try :
-            response = genius.search_genius_web(main_search, per_page=5, page=genius_page)
+            response = genius.search_songs(main_search, per_page=5, page=genius_page)
         except :
             print("error searching songs :(")
     print('Num added to playlist: {}'.format(len(trackIds)))
