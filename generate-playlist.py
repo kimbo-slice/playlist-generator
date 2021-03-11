@@ -32,12 +32,9 @@ spotify_page = args.spotifyPage
 #so we don't spin for a while
 def ran_out_of_hits_genius(response) :
     hits = response['hits']
+    #hits = response['sections'][0]['hits']
     if len(hits) > 0:
         return False
-    """ for hit in hits :
-        if len(hit['hits']) and (hit['type'] == 'song' or hit['type'] == 'lyric') :
-            return False
-    print("Ran out of hits!") """
     return True
 
 def set_active_playlist() :
@@ -141,18 +138,22 @@ def get_spotify_id_from_song(title, artist) :
 def from_genius() :
     print("Using GENIUS to search")
     global genius_page
-    response = genius.search_songs(main_search, per_page=5, page=genius_page)#search_genius_web(main_search, per_page=5, page=genius_page)
+    #response = genius.search_lyrics(main_search, per_page=5, page=genius_page)
+    response = genius.search_songs(main_search, per_page=5, page=genius_page)
     while not ran_out_of_hits_genius(response) :
+        #hits = response['sections'][0]['hits']
         hits = response['hits']
         for hit in hits :
-            title=hit['result']['title']
-            artist=hit['result']['primary_artist'].get('name')
-            song = genius.search_song(title=title, artist=artist)
-            lyrics = song.lyrics
+            url = hit['result']['url']
+            lyrics = genius.lyrics(song_url=url)
+            #song = genius.search_song(title=title, artist=artist)
+            #lyrics = song.lyrics
             if not is_banger(lyrics, threshold) :
                     continue
             else :
-                 add_unique_song_to_playlist(get_spotify_id_from_song(title, artist))
+                title=hit['result']['title']
+                artist=hit['result']['primary_artist'].get('name')
+                add_unique_song_to_playlist(get_spotify_id_from_song(title, artist))
         genius_page += 1
         print("Left off on {}".format(genius_page))
         try :
