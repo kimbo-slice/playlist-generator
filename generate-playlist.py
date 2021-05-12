@@ -77,7 +77,11 @@ def create_playlist(title) :
 
 #Is it a banger?
 def is_banger(lyrics, threshold) :
-    re.sub('[^A-Za-z0-9 ]+', '', lyrics)
+    try :
+        re.sub('[^A-Za-z0-9 ]+', '', lyrics)
+    except : 
+        "error getting lyrics"
+        return False
     totalChars = len(lyrics)
     lyric = lyrics.translate(str.maketrans('', '', string.punctuation)).lower()
     countChars = 0
@@ -146,8 +150,6 @@ def from_genius() :
         for hit in hits :
             url = hit['result']['url']
             lyrics = genius.lyrics(song_url=url)
-            #song = genius.search_song(title=title, artist=artist)
-            #lyrics = song.lyrics
             if not is_banger(lyrics, threshold) :
                     continue
             else :
