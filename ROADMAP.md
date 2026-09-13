@@ -17,15 +17,31 @@ circle-of-fifths key moves (they don't have to match, just not be jarring).
   attribution backlink). Deezer gives BPM only.
 - Store bpm/key on the per-song record (see #5) so ordering is a pure local read.
 
-## 3. Own fetch-once index / datastore  *(original goal #5, the enabler)*
-A local store (SQLite) so each song's lyrics are fetched once, ever.
-- **`songs`**: song_id, title, artist, song_key, lyric_fingerprint, bpm,
-  musical_key, mode, total_length, fetched_at.
-- **`term_index`**: term, song_id, occurrences, match_pct.
-- Store DERIVED stats, not raw lyric text (better legally — lyrics are
-  input-only, never displayed — and far faster to search).
-- Payoff: hours-long re-runs skip already-checked songs; search runs against
-  local data instead of hammering Genius; feeds both #1 and #2.
+## 3. Own fetch-once lyric cache / index  *(original goal #5, the enabler)*
+A local store so each song's lyrics are fetched **once, ever** -- across runs
+and (hosted) across users. Subsumes the "already checked this song" idea.
+
+**Design decided (2026-09):**
+- **SQLite** (`cache.db`), not JSON -- concurrency + indexing + ports to hosting.
+- One `songs` row, keyed by our existing `song_key` (normalized title/artist, so
+  remixes / `feat.` variants collapse to one entry):
+  ```sql
+  songs(song_key PK, title, artist, spotify_id, lyrics, has_lyrics,
+        bpm, musical_key, mode, fetched_at)
+  ```
+- **Negative caching** via `has_lyrics=0` -- the junk (`feat. X` live cuts with
+  no lyrics) is recorded once and never re-fetched.
+- **Store cleaned lyrics** (post-`clean_genius_lyrics`) so *any* future search
+  term can be scored without re-fetching. Personal/input-only = low legal risk;
+  schema lets us drop the `lyrics` column for a public launch (derived-only).
+- Also caches the resolved `spotify_id` (skip re-resolution) and reserves
+  `bpm`/`musical_key`/`mode` columns for vibe ordering (#2).
+- **Injectable `LyricStore`** on `PlaylistBuilder`: checked before ANY Genius
+  call (hit -> use cached lyrics, or skip if has_lyrics=0); miss -> fetch (with
+  the 429 backoff) then upsert. No store -> today's behavior. Tests use an
+  in-memory `:memory:` DB (still zero network).
+- Payoff: re-runs ~zero Genius calls; both engines become affordable; the
+  hosting rate-limit chokepoint largely disappears; feeds #1 and #2.
 
 ## 4. Claude vibe-based discovery  *(new idea)*
 Discover songs by *vibe/theme/mood* instead of literal lyric keywords — e.g.
