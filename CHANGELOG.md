@@ -1,5 +1,13 @@
 # Changelog
 
+## Matching quality: strip Genius scaffolding
+- `clean_genius_lyrics` now removes the "<Title> Lyrics" header, contributor
+  preamble, and bracketed section/speaker labels (`[Chorus]`, `[Kristen:]`)
+  before matching. Fixes false positives where a featured artist's name in a
+  `[Name:]` label counted as a lyric hit (e.g. "kristen" scored 7.9% on a duet
+  she only performs on -> now 0%). `build_genius_client` also sets
+  `remove_section_headers=True`. +6 tests.
+
 ## Frontend v1 (local web UI)
 - `app.py` (FastAPI) + `index.html` (vanilla JS): run the generator from the
   browser, watch a live console, Stop mid-run, and hear the playlist in an

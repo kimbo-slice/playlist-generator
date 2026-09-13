@@ -39,6 +39,14 @@ _DASH_SUFFIX_RE = re.compile(r"\s-\s.*$")                # " - 2011 Remaster", "
 _FEAT_RE = re.compile(r"\b(?:feat|ft|featuring|with)\b.*", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
 
+# Genius scaffolding that isn't part of the actual lyric:
+#   [Verse]/[Chorus]/[Kristen:] section & speaker labels (speaker labels carry
+#   featured-artist names, which otherwise get counted as lyric matches).
+_SECTION_HEADER_RE = re.compile(r"\[[^\]]*\]")
+_CONTRIBUTORS_RE = re.compile(r"^\s*\d*\s*Contributors?", re.IGNORECASE)
+_LYRICS_HEADER_RE = re.compile(r"^.*?Lyrics")  # "<Title> Lyrics" preamble (case-sensitive)
+_EMBED_RE = re.compile(r"\d*Embed\s*$")
+
 
 def normalize_text(text: Optional[str]) -> str:
     """Lowercase, strip punctuation, and collapse whitespace.
@@ -53,11 +61,22 @@ def normalize_text(text: Optional[str]) -> str:
 
 
 def clean_genius_lyrics(lyrics: Optional[str]) -> str:
-    """Trim boilerplate Genius appends to lyric text (e.g. a trailing 'Embed')."""
+    """Strip Genius scaffolding so only the actual lyric words are matched.
+
+    Removes, in order: a leading "<n> Contributors" marker, the "<Title> Lyrics"
+    header, bracketed section/speaker labels (``[Chorus]``, ``[Kristen:]`` -- the
+    latter carries featured-artist names that would otherwise be counted as lyric
+    hits), and a trailing "<count>Embed". Bracketed labels become a space so
+    adjacent words don't merge.
+    """
     if not lyrics:
         return ""
-    # Genius often ends the blob with "<contributor-count>Embed".
-    return re.sub(r"\d*Embed$", "", lyrics.strip())
+    text = lyrics.strip()
+    text = _CONTRIBUTORS_RE.sub("", text).lstrip()
+    text = _LYRICS_HEADER_RE.sub("", text, count=1)
+    text = _SECTION_HEADER_RE.sub(" ", text)
+    text = _EMBED_RE.sub("", text)
+    return text.strip()
 
 
 def match_percentage(lyrics: Optional[str], searches: Iterable[str]) -> float:
@@ -464,7 +483,9 @@ def build_genius_client():
     token = os.environ.get("GENIUS_TOKEN")
     if not token:
         raise SystemExit("GENIUS_TOKEN environment variable is not set.")
-    return lyricsgenius.Genius(token)
+    # remove_section_headers strips [Chorus]/[Artist:] labels at the source too;
+    # clean_genius_lyrics does it defensively regardless. verbose off = quiet logs.
+    return lyricsgenius.Genius(token, remove_section_headers=True, verbose=False)
 
 
 def _seed_from_playlist_tracks(sp, builder: "PlaylistBuilder", playlist_id: str) -> None:

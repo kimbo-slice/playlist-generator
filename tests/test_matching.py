@@ -49,6 +49,39 @@ class NormalizeTextTests(unittest.TestCase):
         self.assertEqual(gp.normalize_text(""), "")
 
 
+class CleanLyricsTests(unittest.TestCase):
+    def test_strips_title_header(self):
+        cleaned = gp.clean_genius_lyrics("Text Me Merry Christmas Lyrics\nthis holiday")
+        self.assertEqual(cleaned, "this holiday")
+
+    def test_strips_contributor_preamble(self):
+        cleaned = gp.clean_genius_lyrics("9 ContributorsSong Lyrics\nreal words")
+        self.assertEqual(cleaned, "real words")
+
+    def test_strips_section_and_speaker_labels(self):
+        cleaned = gp.clean_genius_lyrics("Duet Lyrics\n[Kristen:]\nsnow falls\n[Mike:]\nlights glow")
+        self.assertNotIn("[", cleaned)
+        self.assertNotIn("Kristen", cleaned)
+        self.assertNotIn("Mike", cleaned)
+        self.assertIn("snow falls", cleaned)
+
+    def test_strips_trailing_embed(self):
+        self.assertEqual(gp.clean_genius_lyrics("words here5Embed"), "words here")
+
+    def test_featured_artist_name_not_counted(self):
+        # The bug: a featured artist's name in a [Name:] label counted as a lyric hit.
+        raw = "Holiday Duet Lyrics\n[Kristen:]\nsnow is falling\n[Mike:]\nlights are glowing"
+        cleaned = gp.clean_genius_lyrics(raw)
+        # Searching the featured performer's name now scores zero -- it's only a label.
+        self.assertEqual(gp.match_percentage(cleaned, ["kristen"]), 0.0)
+        # A real lyric word still matches.
+        self.assertGreater(gp.match_percentage(cleaned, ["snow"]), 0.0)
+
+    def test_handles_empty(self):
+        self.assertEqual(gp.clean_genius_lyrics(""), "")
+        self.assertEqual(gp.clean_genius_lyrics(None), "")
+
+
 class MatchPercentageTests(unittest.TestCase):
     def test_case_insensitive_match(self):
         # This is the original bug: a capitalized query matched nothing.
