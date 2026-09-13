@@ -49,8 +49,13 @@
   aside .head { display:flex; align-items:center; justify-content:space-between; }
   aside h2 { margin:0; font-size:13px; text-transform:uppercase; color:var(--muted); letter-spacing:.04em; }
   aside button.refresh { background:#2a2a2a; color:var(--text); padding:4px 10px; font-size:12px; border-radius:14px; }
-  .player-empty { color:var(--muted); font-size:13px; text-align:center; padding:40px 10px;
-                  border:1px dashed var(--line); border-radius:10px; }
+  .player-state { color:var(--muted); font-size:13px; text-align:center; padding:44px 16px;
+                  border:1px dashed var(--line); border-radius:12px; display:flex;
+                  flex-direction:column; align-items:center; gap:12px; line-height:1.5; }
+  .player-state .icon { font-size:30px; opacity:.85; }
+  .spinner { width:26px; height:26px; border:3px solid var(--line); border-top-color:var(--green);
+             border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   iframe { border:0; border-radius:12px; width:100%; height:420px; }
 </style>
 </head>
@@ -92,13 +97,23 @@
       <h2>Spotify Player</h2>
       <button class="refresh" id="refresh" disabled>↻ refresh</button>
     </div>
-    <div id="playerWrap"><div class="player-empty">The player appears once a playlist is created.</div></div>
+    <div id="playerWrap"></div>
   </aside>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let cursor = 0, polling = null, playlistId = null;
+let cursor = 0, polling = null, playlistId = null, playerMounted = false;
+
+const PLAYER_STATES = {
+  idle: '<div class="player-state"><div class="icon">🎧</div>'
+      + '<div>Your playlist player appears here.<br>Hit <b>Start</b> to begin.</div></div>',
+  warming: '<div class="player-state"><div class="spinner"></div>'
+      + '<div>Building your playlist…<br>the player loads when the first track lands.</div></div>',
+  empty: '<div class="player-state"><div class="icon">🕳️</div>'
+      + '<div>No songs were added.<br>Try a lower threshold or another term.</div></div>',
+};
+function renderPlayer(state) { $("playerWrap").innerHTML = PLAYER_STATES[state]; }
 
 function setStatus(s) {
   $("statusText").textContent = s;
@@ -118,12 +133,14 @@ function line(ev) {
   if (atBottom) c.scrollTop = c.scrollHeight;
 }
 
-function showPlayer(id) {
-  if (!id || id === playlistId) return;
-  playlistId = id;
+function mountPlayer() {
+  // Only mount the real embed once the playlist actually has a track --
+  // an empty Spotify playlist embed renders as a broken-looking blank.
+  if (playerMounted || !playlistId) return;
   $("playerWrap").innerHTML =
-    '<iframe src="https://open.spotify.com/embed/playlist/' + id +
+    '<iframe src="https://open.spotify.com/embed/playlist/' + playlistId +
     '?utm_source=generator" allow="encrypted-media" loading="lazy"></iframe>';
+  playerMounted = true;
   $("refresh").disabled = false;
 }
 
@@ -136,14 +153,24 @@ async function poll() {
   const r = await fetch("/api/events?cursor=" + cursor);
   const data = await r.json();
   cursor = data.cursor;
-  if (data.playlist_id) showPlayer(data.playlist_id);
+  // Playlist exists but is empty until the first track -> show the warming state.
+  if (data.playlist_id && !playlistId) {
+    playlistId = data.playlist_id;
+    if (!playerMounted) renderPlayer("warming");
+  }
   let done = false;
   for (const ev of data.events) {
     line(ev);
+    if (ev.kind === "added") mountPlayer();
     if (ev.kind === "done") { done = true; setStatus(ev.status || "complete"); }
   }
-  if (done) { finish(); refreshPlayer(); }
-  else setStatus(data.status);
+  if (done) {
+    finish();
+    if (playerMounted) refreshPlayer();
+    else renderPlayer("empty");
+  } else {
+    setStatus(data.status);
+  }
 }
 
 function finish() {
@@ -161,7 +188,8 @@ async function start() {
     genius: $("genius").checked,
   };
   if (!body.query) { alert("Enter a search term first."); return; }
-  $("console").innerHTML = ""; cursor = 0; playlistId = null;
+  $("console").innerHTML = ""; cursor = 0; playlistId = null; playerMounted = false;
+  renderPlayer("idle"); $("refresh").disabled = true;
   $("start").disabled = true; $("stop").disabled = false;
   setStatus("running");
   const r = await fetch("/api/run", {
@@ -184,6 +212,8 @@ $("start").onclick = start;
 $("stop").onclick = stop;
 $("refresh").onclick = refreshPlayer;
 $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
+
+renderPlayer("idle");  // cold-start state on first load
 </script>
 </body>
 </html>
