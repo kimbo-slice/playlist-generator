@@ -1,5 +1,17 @@
 # Changelog
 
+## Frontend v1 (local web UI)
+- `app.py` (FastAPI) + `index.html` (vanilla JS): run the generator from the
+  browser, watch a live console, Stop mid-run, and hear the playlist in an
+  embedded Spotify player. Run with `uvicorn app:app --port 8000`.
+- Added two hosting-ready seams to `PlaylistBuilder` (CLI behavior unchanged):
+  an `on_event` callback (structured progress events; falls back to stdout) and
+  a `stop_flag` (cooperative stop checked between songs/pages).
+- Console updates by polling `/api/events` (swappable to SSE later).
+- New offline tests: `tests/test_seams.py`, `tests/test_app.py` (TestClient +
+  fake executor). Suite now 47, still zero live API calls.
+- See `FRONTEND.md` for architecture and the hosting fast-follow plan.
+
 ## Refactor + bug fixes
 
 Rewrote the original `generate-playlist.py` (buggy, ran everything at import time,

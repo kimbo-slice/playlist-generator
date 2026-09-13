@@ -22,8 +22,9 @@ import hashlib
 import os
 import re
 import string
+import threading
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 
 # --------------------------------------------------------------------------- #
@@ -184,6 +185,28 @@ class PlaylistBuilder:
     seen_fingerprints: set = field(default_factory=set)
     # Songs found in a lyrics DB but not placeable on Spotify (title/artist + reason).
     misses: list = field(default_factory=list)
+    # Seams for the web UI (both optional -> CLI behavior is unchanged):
+    #   on_event: called with a structured event dict for every notable step;
+    #             when None, events fall back to printing to stdout.
+    #   stop_flag: set to request a cooperative stop between songs/pages.
+    on_event: Optional[Callable[[dict], None]] = None
+    stop_flag: threading.Event = field(default_factory=threading.Event)
+
+    # -- progress + control seams ------------------------------------------ #
+    def emit(self, kind: str, message: str = "", **data) -> None:
+        """Report a step as a structured event (web UI) or a printed line (CLI)."""
+        event = {"kind": kind, "message": message, **data}
+        if self.on_event is not None:
+            self.on_event(event)
+        elif message:
+            print(message)
+
+    def request_stop(self) -> None:
+        """Ask an in-progress run to stop at the next song/page boundary."""
+        self.stop_flag.set()
+
+    def should_stop(self) -> bool:
+        return self.stop_flag.is_set()
 
     # -- de-duplication ---------------------------------------------------- #
     def is_new_song(
@@ -233,7 +256,8 @@ class PlaylistBuilder:
     ) -> bool:
         """Add a song to the playlist if it is new; return whether it was added."""
         if not self.is_new_song(track_id, title, artist, lyrics):
-            print("Skipping duplicate: {} - {}".format(title, artist))
+            self.emit("duplicate", "Skipping duplicate: {} - {}".format(title, artist),
+                      title=title, artist=artist)
             return False
         self.register(track_id, title, artist, lyrics)
         try:
@@ -242,10 +266,12 @@ class PlaylistBuilder:
                 playlist_id=self.playlist_id,
                 tracks=[track_id],
             )
-            print("Added: {} - {}".format(title, artist))
+            self.emit("added", "Added: {} - {}".format(title, artist),
+                      title=title, artist=artist, track_id=track_id)
             return True
         except Exception:
-            print("Error adding song to playlist :( {} - {}".format(title, artist))
+            self.emit("error", "Error adding song to playlist :( {} - {}".format(title, artist),
+                      title=title, artist=artist)
             return False
 
     # -- lyric + spotify lookups ------------------------------------------ #
@@ -253,7 +279,7 @@ class PlaylistBuilder:
         try:
             song = self.genius.search_song(title, artist=artist, get_full_info=False)
         except Exception:
-            print("Error fetching lyrics for {} - {}".format(title, artist))
+            self.emit("error", "Error fetching lyrics for {} - {}".format(title, artist))
             return ""
         if song is None:
             return ""
@@ -288,7 +314,7 @@ class PlaylistBuilder:
             try:
                 result = self.sp.search(q=query, type="track", limit=10)
             except Exception:
-                print("Error searching Spotify for {} - {}".format(title, artist))
+                self.emit("error", "Error searching Spotify for {} - {}".format(title, artist))
                 return None, "search_error"
             items = result["tracks"]["items"]
             if items:
@@ -316,18 +342,25 @@ class PlaylistBuilder:
             verdict = "MATCH"
         else:
             verdict = "below"
-        print("  {:6.2f}% / {:.2f}% threshold  [{}]  {} - {}".format(
-            pct, self.threshold, verdict, title, artist))
+        self.emit(
+            "evaluate",
+            "  {:6.2f}% / {:.2f}% threshold  [{}]  {} - {}".format(
+                pct, self.threshold, verdict, title, artist),
+            title=title, artist=artist, match_pct=pct,
+            threshold=self.threshold, verdict=verdict,
+        )
         return matched
 
     # -- search engines ---------------------------------------------------- #
     def from_spotify(self, main_search: str, start_offset: int = 0) -> None:
         """Use Spotify as the discovery engine, matching on Genius lyrics."""
-        print("Searching Spotify for '{}'".format(main_search))
+        self.emit("search", "Searching Spotify for '{}'".format(main_search), engine="spotify")
         offset = start_offset
         limit = 50
         # Spotify caps search paging at offset+limit <= 1000.
         while offset < 1000:
+            if self.should_stop():
+                break
             response = self.sp.search(
                 q="track:{}".format(main_search),
                 type="track",
@@ -338,29 +371,38 @@ class PlaylistBuilder:
             if not items:
                 break
             for song in items:
+                if self.should_stop():
+                    break
                 title = song["name"]
                 artist = song["artists"][0]["name"]
                 lyrics = self.get_lyrics_from_genius(title, artist)
                 if self.evaluate_match(title, artist, lyrics):
                     self.add_song(song["id"], title, artist, lyrics=lyrics)
+            if self.should_stop():
+                break
             offset += limit
-            print("Spotify offset now {}".format(offset))
-        print("Playlist size so far: {}".format(len(self.track_ids)))
+            self.emit("progress", "Spotify offset now {}".format(offset), offset=offset)
+        self.emit("progress", "Playlist size so far: {}".format(len(self.track_ids)),
+                  playlist_size=len(self.track_ids))
 
     def from_genius(self, main_search: str, start_page: int = 1) -> None:
         """Use Genius as the discovery engine, matching on its lyrics."""
-        print("Searching Genius for '{}'".format(main_search))
+        self.emit("search", "Searching Genius for '{}'".format(main_search), engine="genius")
         page = start_page
         while True:
+            if self.should_stop():
+                break
             try:
                 response = self.genius.search_songs(main_search, per_page=5, page=page)
             except Exception:
-                print("Error searching Genius on page {}".format(page))
+                self.emit("error", "Error searching Genius on page {}".format(page))
                 break
             hits = response.get("hits", [])
             if not hits:
                 break
             for hit in hits:
+                if self.should_stop():
+                    break
                 result = hit["result"]
                 title = result["title"]
                 artist = result["primary_artist"].get("name")
@@ -372,24 +414,32 @@ class PlaylistBuilder:
                     self.record_miss(title, artist, reason)
                     continue
                 self.add_song(track_id, title, artist, lyrics=lyrics)
+            if self.should_stop():
+                break
             page += 1
-            print("Genius page now {}".format(page))
-        print("Playlist size so far: {}".format(len(self.track_ids)))
+            self.emit("progress", "Genius page now {}".format(page), page=page)
+        self.emit("progress", "Playlist size so far: {}".format(len(self.track_ids)),
+                  playlist_size=len(self.track_ids))
 
     # -- miss tracking ----------------------------------------------------- #
     def record_miss(self, title: str, artist: str, reason: Optional[str]) -> None:
         """Record a lyric-matched song we could not place on Spotify."""
         self.misses.append({"title": title, "artist": artist, "reason": reason})
-        print("Could not place on Spotify ({}): {} - {}".format(reason, title, artist))
+        self.emit("miss", "Could not place on Spotify ({}): {} - {}".format(reason, title, artist),
+                  title=title, artist=artist, reason=reason)
 
     def report_misses(self) -> None:
-        """Print a summary of songs that matched the lyrics but never reached the playlist."""
+        """Report songs that matched the lyrics but never reached the playlist."""
         if not self.misses:
-            print("\nNo missed songs -- every lyric match was placed on Spotify.")
+            self.emit("summary", "\nNo missed songs -- every lyric match was placed on Spotify.",
+                      miss_count=0)
             return
-        print("\n{} lyric match(es) could not be added to the playlist:".format(len(self.misses)))
+        self.emit("summary",
+                  "\n{} lyric match(es) could not be added to the playlist:".format(len(self.misses)),
+                  miss_count=len(self.misses))
         for miss in self.misses:
-            print("  [{}] {} - {}".format(miss["reason"], miss["title"], miss["artist"]))
+            self.emit("summary", "  [{}] {} - {}".format(miss["reason"], miss["title"], miss["artist"]),
+                      title=miss["title"], artist=miss["artist"], reason=miss["reason"])
 
 
 # --------------------------------------------------------------------------- #

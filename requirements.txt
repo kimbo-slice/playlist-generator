@@ -1,0 +1,10 @@
+# Core pipeline
+spotipy
+lyricsgenius
+
+# Web UI (v1)
+fastapi
+uvicorn[standard]
+
+# Test-only (web plumbing tests use TestClient)
+httpx
