@@ -153,16 +153,23 @@ async function poll() {
   const r = await fetch("/api/events?cursor=" + cursor);
   const data = await r.json();
   cursor = data.cursor;
-  // Playlist exists but is empty until the first track -> show the warming state.
-  if (data.playlist_id && !playlistId) {
-    playlistId = data.playlist_id;
-    if (!playerMounted) renderPlayer("warming");
-  }
   let done = false;
   for (const ev of data.events) {
     line(ev);
-    if (ev.kind === "added") mountPlayer();
+    if (ev.kind === "playlist") {
+      playlistId = ev.playlist_id;
+      // Non-empty already (a re-run against an existing playlist) -> mount now.
+      if (ev.track_count > 0) mountPlayer();
+      else if (!playerMounted) renderPlayer("warming");
+    }
+    // A new add OR a duplicate both mean the playlist has at least one track.
+    if (ev.kind === "added" || ev.kind === "duplicate") mountPlayer();
     if (ev.kind === "done") { done = true; setStatus(ev.status || "complete"); }
+  }
+  // Fallback if the playlist id only arrives at the top level.
+  if (data.playlist_id && !playlistId) {
+    playlistId = data.playlist_id;
+    if (!playerMounted) renderPlayer("warming");
   }
   if (done) {
     finish();

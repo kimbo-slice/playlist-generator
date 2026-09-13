@@ -23,6 +23,7 @@ import os
 import re
 import string
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
@@ -210,6 +211,8 @@ class PlaylistBuilder:
     #   stop_flag: set to request a cooperative stop between songs/pages.
     on_event: Optional[Callable[[dict], None]] = None
     stop_flag: threading.Event = field(default_factory=threading.Event)
+    # Current Genius backoff (seconds); grows on 429, resets on success.
+    genius_backoff: float = 0.0
 
     # -- progress + control seams ------------------------------------------ #
     def emit(self, kind: str, message: str = "", **data) -> None:
@@ -293,21 +296,58 @@ class PlaylistBuilder:
                       title=title, artist=artist)
             return False
 
+    # -- Genius rate-limit handling --------------------------------------- #
+    @staticmethod
+    def _is_rate_limited(exc: Exception) -> bool:
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) == 429:
+            return True
+        return "429" in str(exc)
+
+    def _genius_cooldown(self) -> None:
+        """Back off when Genius returns 429, pausing the run so the limit recovers.
+
+        The delay grows on repeated 429s (capped) and the sleep is broken up so a
+        Stop request is still honored promptly. `genius_backoff` resets to 0 on
+        the next successful fetch.
+        """
+        self.genius_backoff = min(60.0, self.genius_backoff * 2 if self.genius_backoff else 10.0)
+        self.emit("progress",
+                  "Genius rate-limited (429) -- pausing {:.0f}s to recover".format(self.genius_backoff),
+                  backoff=self.genius_backoff)
+        waited = 0.0
+        while waited < self.genius_backoff and not self.should_stop():
+            time.sleep(0.5)
+            waited += 0.5
+
+    def _handle_genius_error(self, exc: Exception, context: str) -> None:
+        """On 429 back off; otherwise surface the (diagnosable) error."""
+        if self._is_rate_limited(exc):
+            self._genius_cooldown()
+        else:
+            self.emit("error", "Error {} ({}: {})".format(context, type(exc).__name__, exc),
+                      error=type(exc).__name__)
+
     # -- lyric + spotify lookups ------------------------------------------ #
     def get_lyrics_from_genius(self, title: str, artist: str) -> str:
         try:
             song = self.genius.search_song(title, artist=artist, get_full_info=False)
         except Exception as exc:
-            # Surface the exception type so mass failures are diagnosable
-            # (a burst of Timeout/HTTPError usually means Genius throttling).
-            self.emit("error",
-                      "Error fetching lyrics for {} - {} ({}: {})".format(
-                          title, artist, type(exc).__name__, exc),
-                      title=title, artist=artist, error=type(exc).__name__)
+            self._handle_genius_error(exc, "fetching lyrics for {} - {}".format(title, artist))
             return ""
+        self.genius_backoff = 0.0  # success -> stop backing off
         if song is None:
             return ""
         return clean_genius_lyrics(song.lyrics)
+
+    def fetch_lyrics_by_url(self, url: str) -> str:
+        try:
+            text = self.genius.lyrics(song_url=url)
+        except Exception as exc:
+            self._handle_genius_error(exc, "fetching lyrics from {}".format(url))
+            return ""
+        self.genius_backoff = 0.0
+        return clean_genius_lyrics(text)
 
     def resolve_spotify_track(
         self, title: str, artist: str
@@ -418,9 +458,14 @@ class PlaylistBuilder:
                 break
             try:
                 response = self.genius.search_songs(main_search, per_page=5, page=page)
-            except Exception:
-                self.emit("error", "Error searching Genius on page {}".format(page))
+            except Exception as exc:
+                if self._is_rate_limited(exc):
+                    self._genius_cooldown()
+                    continue  # retry the same page after backing off
+                self.emit("error", "Error searching Genius on page {} ({})".format(
+                    page, type(exc).__name__))
                 break
+            self.genius_backoff = 0.0
             hits = response.get("hits", [])
             if not hits:
                 break
@@ -430,7 +475,7 @@ class PlaylistBuilder:
                 result = hit["result"]
                 title = result["title"]
                 artist = result["primary_artist"].get("name")
-                lyrics = clean_genius_lyrics(self.genius.lyrics(song_url=result["url"]))
+                lyrics = self.fetch_lyrics_by_url(result["url"])
                 if not self.evaluate_match(title, artist, lyrics):
                     continue
                 track_id, reason = self.resolve_spotify_track(title, artist)
@@ -488,12 +533,13 @@ def build_genius_client():
     token = os.environ.get("GENIUS_TOKEN")
     if not token:
         raise SystemExit("GENIUS_TOKEN environment variable is not set.")
-    # remove_section_headers strips [Chorus]/[Artist:] labels at the source too;
-    # clean_genius_lyrics does it defensively regardless. verbose off = quiet logs.
-    # retries + a longer timeout ride out transient Genius timeouts/throttling
-    # instead of dropping the song on the first hiccup.
+    # sleep_time paces requests to stay under Genius' rate limit (the biggest
+    # lever against 429s); tune via GENIUS_SLEEP. retries kept low so we don't
+    # amplify a 429 -- the builder's own cooldown handles throttling instead.
+    sleep_time = float(os.environ.get("GENIUS_SLEEP", "1.0"))
     return lyricsgenius.Genius(
-        token, remove_section_headers=True, verbose=False, retries=3, timeout=10,
+        token, remove_section_headers=True, verbose=False,
+        retries=1, timeout=10, sleep_time=sleep_time,
     )
 
 

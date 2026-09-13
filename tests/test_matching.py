@@ -96,6 +96,33 @@ class LyricFetchErrorTests(unittest.TestCase):
         self.assertEqual(err["error"], "TimeoutError")  # diagnosable, not swallowed
 
 
+class RateLimitTests(unittest.TestCase):
+    def test_429_triggers_backoff_not_error(self):
+        class Resp:
+            status_code = 429
+
+        class RateLimited(Exception):
+            response = Resp()
+
+        class Boom:
+            def search_song(self, *a, **k):
+                raise RateLimited("429 Too Many Requests")
+
+        events = []
+        b = gp.PlaylistBuilder(sp=None, genius=Boom(), searches=["x"], threshold=3.0,
+                               on_event=events.append)
+        b.request_stop()  # so the cooldown records backoff but doesn't actually sleep
+        self.assertEqual(b.get_lyrics_from_genius("S", "A"), "")
+        self.assertEqual(b.genius_backoff, 10.0)          # backed off
+        kinds = [e["kind"] for e in events]
+        self.assertIn("progress", kinds)                  # a "pausing to recover" notice
+        self.assertNotIn("error", kinds)                  # NOT logged as a hard error
+
+    def test_is_rate_limited_detection(self):
+        self.assertTrue(gp.PlaylistBuilder._is_rate_limited(Exception("429 Client Error")))
+        self.assertFalse(gp.PlaylistBuilder._is_rate_limited(Exception("read timed out")))
+
+
 class MatchPercentageTests(unittest.TestCase):
     def test_case_insensitive_match(self):
         # This is the original bug: a capitalized query matched nothing.

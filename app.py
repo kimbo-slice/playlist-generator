@@ -89,8 +89,10 @@ def default_executor(run: Run) -> None:
     args = SimpleNamespace(playlistId=None, title=p.title, query=p.query)
     builder.playlist_id = resolve_playlist(sp, builder, args)
     run.playlist_id = builder.playlist_id
+    # track_count reflects songs already in the playlist (seeded) -> lets the UI
+    # mount the player immediately when re-running against a non-empty playlist.
     run.emit({"kind": "playlist", "message": "Playlist ready.",
-              "playlist_id": builder.playlist_id})
+              "playlist_id": builder.playlist_id, "track_count": len(builder.track_ids)})
 
     if p.spotify:
         builder.from_spotify(p.query)
