@@ -595,8 +595,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--bangerThreshold", "-bt", default=3.0, type=float,
         help="Min percent of lyric text the term must occupy to count as a match",
     )
-    parser.add_argument("--spotify", "-sp", default="True", help="Search using Spotify")
-    parser.add_argument("--genius", "-g", default="True", help="Search using Genius")
+    parser.add_argument("--spotify", "-sp", default="True",
+                        help="Discover songs via Spotify title search")
+    parser.add_argument("--genius", "-g", default="False",
+                        help="Also discover via Genius search (off by default; lyrics always use Genius)")
     parser.add_argument(
         "--spotifyPage", "-spp", default=0, type=int,
         help="Starting Spotify search offset (for resuming an interrupted run)",

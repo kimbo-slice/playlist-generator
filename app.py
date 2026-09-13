@@ -37,8 +37,8 @@ class RunParams(BaseModel):
     query: str
     title: Optional[str] = None
     threshold: float = 3.0
-    spotify: bool = True
-    genius: bool = True
+    spotify: bool = True    # Spotify title search as the discovery engine
+    genius: bool = False    # Genius as a discovery engine (mediocre); lyrics always use Genius
     matches: Optional[List[str]] = None
 
 
