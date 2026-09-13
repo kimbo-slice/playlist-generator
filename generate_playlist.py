@@ -297,8 +297,13 @@ class PlaylistBuilder:
     def get_lyrics_from_genius(self, title: str, artist: str) -> str:
         try:
             song = self.genius.search_song(title, artist=artist, get_full_info=False)
-        except Exception:
-            self.emit("error", "Error fetching lyrics for {} - {}".format(title, artist))
+        except Exception as exc:
+            # Surface the exception type so mass failures are diagnosable
+            # (a burst of Timeout/HTTPError usually means Genius throttling).
+            self.emit("error",
+                      "Error fetching lyrics for {} - {} ({}: {})".format(
+                          title, artist, type(exc).__name__, exc),
+                      title=title, artist=artist, error=type(exc).__name__)
             return ""
         if song is None:
             return ""
@@ -485,7 +490,11 @@ def build_genius_client():
         raise SystemExit("GENIUS_TOKEN environment variable is not set.")
     # remove_section_headers strips [Chorus]/[Artist:] labels at the source too;
     # clean_genius_lyrics does it defensively regardless. verbose off = quiet logs.
-    return lyricsgenius.Genius(token, remove_section_headers=True, verbose=False)
+    # retries + a longer timeout ride out transient Genius timeouts/throttling
+    # instead of dropping the song on the first hiccup.
+    return lyricsgenius.Genius(
+        token, remove_section_headers=True, verbose=False, retries=3, timeout=10,
+    )
 
 
 def _seed_from_playlist_tracks(sp, builder: "PlaylistBuilder", playlist_id: str) -> None:

@@ -82,6 +82,20 @@ class CleanLyricsTests(unittest.TestCase):
         self.assertEqual(gp.clean_genius_lyrics(None), "")
 
 
+class LyricFetchErrorTests(unittest.TestCase):
+    def test_error_surfaces_exception_type_and_returns_empty(self):
+        class Boom:
+            def search_song(self, *a, **k):
+                raise TimeoutError("read timed out")
+
+        events = []
+        b = gp.PlaylistBuilder(sp=None, genius=Boom(), searches=["x"], threshold=3.0,
+                               on_event=events.append)
+        self.assertEqual(b.get_lyrics_from_genius("Song", "Artist"), "")
+        err = next(e for e in events if e["kind"] == "error")
+        self.assertEqual(err["error"], "TimeoutError")  # diagnosable, not swallowed
+
+
 class MatchPercentageTests(unittest.TestCase):
     def test_case_insensitive_match(self):
         # This is the original bug: a capitalized query matched nothing.
