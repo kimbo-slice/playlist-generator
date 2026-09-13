@@ -1,0 +1,11 @@
+# Spotify OAuth token cache -- SECRET, never commit
+cache.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
