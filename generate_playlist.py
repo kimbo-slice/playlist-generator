@@ -244,6 +244,8 @@ class PlaylistBuilder:
     genius_backoff: float = 0.0
     # Optional persistent lyric cache (a LyricStore); None -> no caching.
     lyric_store: object = None
+    # Cached Spotify user id (avoids an sp.me() call on every add).
+    _user_id: Optional[str] = None
     # True when the last fetch failed transiently (error/429) rather than
     # authoritatively returning no lyrics -- so we don't cache it as "no lyrics".
     _last_fetch_error: bool = False
@@ -317,8 +319,10 @@ class PlaylistBuilder:
             return False
         self.register(track_id, title, artist, lyrics)
         try:
+            if self._user_id is None:
+                self._user_id = self.sp.me()["id"]  # fetched once, then reused
             self.sp.user_playlist_add_tracks(
-                user=self.sp.me()["id"],
+                user=self._user_id,
                 playlist_id=self.playlist_id,
                 tracks=[track_id],
             )
@@ -605,8 +609,12 @@ def build_spotify_client():
 
     print("Authenticating with Spotify")
     scope = "playlist-modify-public"
+    # requests_timeout bounds any single call (no indefinite hangs); retries
+    # kept modest so a rate-limited call doesn't block Stop for too long.
     return spotipy.Spotify(
-        auth_manager=SpotifyOAuth(show_dialog=True, scope=scope, cache_path="cache.txt")
+        auth_manager=SpotifyOAuth(show_dialog=True, scope=scope, cache_path="cache.txt"),
+        requests_timeout=10,
+        retries=2,
     )
 
 
