@@ -504,12 +504,21 @@ class PlaylistBuilder:
         while offset < 1000:
             if self.should_stop():
                 break
-            response = self.sp.search(
-                q="track:{}".format(main_search),
-                type="track",
-                limit=limit,
-                offset=offset,
-            )
+            try:
+                response = self.sp.search(
+                    q="track:{}".format(main_search),
+                    type="track",
+                    limit=limit,
+                    offset=offset,
+                )
+            except Exception as exc:
+                # A transient Spotify error (timeout, etc.) shouldn't kill the run;
+                # stop paging this term and let the rest of the run continue.
+                self.emit("error",
+                          "Spotify search failed at offset {} ({}) -- stopping this term".format(
+                              offset, type(exc).__name__),
+                          error=type(exc).__name__)
+                break
             items = response["tracks"]["items"]
             if not items:
                 break

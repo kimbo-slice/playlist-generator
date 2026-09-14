@@ -139,6 +139,28 @@ class FromGeniusPipelineTests(unittest.TestCase):
         self.assertEqual(builder.sp.added, ["sp-hotdog"])  # not duplicated
 
 
+class SpotifyResilienceTests(unittest.TestCase):
+    def test_search_timeout_does_not_crash_run(self):
+        # A transient Spotify error must be caught, not abort the whole run.
+        class BoomSpotify:
+            def me(self):
+                return {"id": "u"}
+
+            def search(self, **kwargs):
+                raise Exception("Read timed out. (read timeout=5)")
+
+            def user_playlist_add_tracks(self, **kwargs):
+                pass
+
+        events = []
+        builder = gp.PlaylistBuilder(
+            sp=BoomSpotify(), genius=None, searches=["x"], threshold=3.0,
+            playlist_id="p", on_event=events.append,
+        )
+        builder.from_spotify("x")  # must NOT raise
+        self.assertTrue(any(e["kind"] == "error" for e in events))
+
+
 class FromSpotifyPipelineTests(unittest.TestCase):
     def test_full_spotify_run(self):
         # Two discovered tracks: one has matching lyrics, one has none.

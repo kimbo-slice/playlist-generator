@@ -133,20 +133,27 @@ function line(ev) {
   if (atBottom) c.scrollTop = c.scrollHeight;
 }
 
+function embedSrc(id) {
+  // Cache-busting timestamp so the embed reloads with the playlist's current
+  // tracks -- Spotify caches the embed, and reusing the same URL won't refresh.
+  return "https://open.spotify.com/embed/playlist/" + id +
+         "?utm_source=generator&t=" + Date.now();
+}
+
 function mountPlayer() {
   // Only mount the real embed once the playlist actually has a track --
   // an empty Spotify playlist embed renders as a broken-looking blank.
   if (playerMounted || !playlistId) return;
   $("playerWrap").innerHTML =
-    '<iframe src="https://open.spotify.com/embed/playlist/' + playlistId +
-    '?utm_source=generator" allow="encrypted-media" loading="lazy"></iframe>';
+    '<iframe src="' + embedSrc(playlistId) + '" allow="encrypted-media" loading="lazy"></iframe>';
   playerMounted = true;
   $("refresh").disabled = false;
 }
 
 function refreshPlayer() {
+  if (!playlistId) return;
   const f = document.querySelector("#playerWrap iframe");
-  if (f) f.src = f.src; // reload to pull newly added tracks
+  if (f) f.src = embedSrc(playlistId); // fresh timestamp forces a real reload
 }
 
 async function poll() {
