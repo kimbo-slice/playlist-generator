@@ -1,5 +1,15 @@
 # Changelog
 
+## Multi-term search + dedup pre-check
+- Search several terms at once: comma-separate them in the UI query field, or
+  pass `-q` + `-m` on the CLI. `assemble_terms()` flattens/splits/de-dupes them;
+  discovery now runs once per term while matching scores against the whole set.
+  So a term like "pocket" gets its own candidates, not just songs found under
+  the main term.
+- De-dup pre-check: known songs (by track ID or normalized title/artist) are now
+  skipped *before* fetching lyrics -- cheaper, and no more misleading
+  "[MATCH] then Skipping duplicate". +5 tests (67 total).
+
 ## Fetch-once lyric cache (Postgres corpus)
 - New `lyric_store.py`: a `LyricStore` interface with `InMemoryLyricStore`
   (tests) and `PostgresLyricStore` (cloud corpus; psycopg imported lazily).

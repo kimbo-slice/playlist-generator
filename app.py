@@ -74,12 +74,13 @@ def default_executor(run: Run) -> None:
     Imported lazily so the web app (and its tests) load without spotipy/genius.
     """
     from generate_playlist import (
-        PlaylistBuilder, build_spotify_client, build_genius_client, resolve_playlist,
+        PlaylistBuilder, assemble_terms, build_spotify_client, build_genius_client,
+        resolve_playlist,
     )
     from lyric_store import build_lyric_store
 
     p = run.params
-    searches = p.matches if p.matches else [p.query]
+    searches = assemble_terms(p.query, p.matches)  # comma-separated query supported
     sp = build_spotify_client()
     genius = build_genius_client()
     store = build_lyric_store()  # Postgres if DATABASE_URL is set, else None
@@ -96,10 +97,12 @@ def default_executor(run: Run) -> None:
     run.emit({"kind": "playlist", "message": "Playlist ready.",
               "playlist_id": builder.playlist_id, "track_count": len(builder.track_ids)})
 
-    if p.spotify:
-        builder.from_spotify(p.query)
-    if p.genius:
-        builder.from_genius(p.query)
+    # Discover candidates for every term; matching still uses the whole set.
+    for term in searches:
+        if p.spotify:
+            builder.from_spotify(term)
+        if p.genius:
+            builder.from_genius(term)
     builder.report_misses()
 
 

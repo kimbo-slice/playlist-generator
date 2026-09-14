@@ -113,6 +113,35 @@ def is_match(lyrics: Optional[str], searches: Iterable[str], threshold: float) -
     return match_percentage(lyrics, searches) >= threshold
 
 
+def assemble_terms(*groups) -> list[str]:
+    """Flatten terms from strings/lists (splitting on commas) into a de-duped list.
+
+    Accepts any mix of a string ("kristen, kristin") or a list
+    (["kristen", "kristin"]). Trims blanks and de-duplicates case-insensitively
+    while preserving order. Used so a search can span several terms -- each is
+    searched for discovery, and all of them are matched against the lyrics.
+    """
+    terms: list[str] = []
+    for group in groups:
+        if not group:
+            continue
+        items = [group] if isinstance(group, str) else list(group)
+        for item in items:
+            for part in str(item).split(","):
+                part = part.strip()
+                if part:
+                    terms.append(part)
+
+    seen = set()
+    unique = []
+    for term in terms:
+        low = term.lower()
+        if low not in seen:
+            seen.add(low)
+            unique.append(term)
+    return unique
+
+
 def song_key(title: Optional[str], artist: Optional[str]) -> tuple[str, str]:
     """A normalized identity for a song, collapsing different releases of it.
 
@@ -333,6 +362,17 @@ class PlaylistBuilder:
             self.emit("error", "Error {} ({}: {})".format(context, type(exc).__name__, exc),
                       error=type(exc).__name__)
 
+    def already_have(self, title: str, artist: str, track_id: Optional[str] = None) -> bool:
+        """True if this song is already in the playlist (by track ID or title/artist).
+
+        Checked before fetching lyrics so we skip known songs cheaply -- no cache
+        lookup, no Genius call, no misleading "[MATCH] then Skipping" output. The
+        lyric-fingerprint check still runs later in add_song as a final guard.
+        """
+        if track_id and track_id in self.track_ids:
+            return True
+        return song_key(title, artist) in self.seen_keys
+
     # -- lyric lookups (cache-aware) -------------------------------------- #
     def cached_lyrics(self, title: str, artist: str, url: Optional[str] = None) -> str:
         """Return a song's lyrics, using the persistent cache when available.
@@ -474,6 +514,10 @@ class PlaylistBuilder:
                     break
                 title = song["name"]
                 artist = song["artists"][0]["name"]
+                if self.already_have(title, artist, song["id"]):
+                    self.emit("duplicate", "Skipping duplicate: {} - {}".format(title, artist),
+                              title=title, artist=artist)
+                    continue
                 lyrics = self.cached_lyrics(title, artist)
                 if self.evaluate_match(title, artist, lyrics):
                     self.add_song(song["id"], title, artist, lyrics=lyrics)
@@ -497,8 +541,8 @@ class PlaylistBuilder:
                 if self._is_rate_limited(exc):
                     self._genius_cooldown()
                     continue  # retry the same page after backing off
-                self.emit("error", "Error searching Genius on page {} ({})".format(
-                    page, type(exc).__name__))
+                self.emit("error", "Error searching Genius on page {} ({}: {})".format(
+                    page, type(exc).__name__, exc))
                 break
             self.genius_backoff = 0.0
             hits = response.get("hits", [])
@@ -510,6 +554,10 @@ class PlaylistBuilder:
                 result = hit["result"]
                 title = result["title"]
                 artist = result["primary_artist"].get("name")
+                if self.already_have(title, artist):
+                    self.emit("duplicate", "Skipping duplicate: {} - {}".format(title, artist),
+                              title=title, artist=artist)
+                    continue
                 lyrics = self.cached_lyrics(title, artist, url=result["url"])
                 if not self.evaluate_match(title, artist, lyrics):
                     continue
@@ -648,7 +696,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> None:
     args = build_parser().parse_args(argv)
 
-    searches = args.matches if args.matches else [args.query]
+    searches = assemble_terms(args.query, args.matches)
     print("Using searches: {}".format(searches))
 
     sp = build_spotify_client()
@@ -669,10 +717,12 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     builder.playlist_id = resolve_playlist(sp, builder, args)
 
-    if args.spotify == "True":
-        builder.from_spotify(args.query, start_offset=args.spotifyPage)
-    if args.genius == "True":
-        builder.from_genius(args.query, start_page=args.geniusPage)
+    # Discover candidates for every term; matching still uses the whole set.
+    for term in searches:
+        if args.spotify == "True":
+            builder.from_spotify(term, start_offset=args.spotifyPage)
+        if args.genius == "True":
+            builder.from_genius(term, start_page=args.geniusPage)
 
     builder.report_misses()
     print("Done. Songs in playlist: {}".format(len(builder.track_ids)))

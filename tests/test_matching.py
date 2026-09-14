@@ -96,6 +96,27 @@ class LyricFetchErrorTests(unittest.TestCase):
         self.assertEqual(err["error"], "TimeoutError")  # diagnosable, not swallowed
 
 
+class AssembleTermsTests(unittest.TestCase):
+    def test_single_term(self):
+        self.assertEqual(gp.assemble_terms("tennis"), ["tennis"])
+
+    def test_comma_separated_string(self):
+        self.assertEqual(gp.assemble_terms("kristen, kristin"), ["kristen", "kristin"])
+
+    def test_query_plus_matches_list(self):
+        self.assertEqual(
+            gp.assemble_terms("kristen", ["kristin", "bonds", "pocket"]),
+            ["kristen", "kristin", "bonds", "pocket"],
+        )
+
+    def test_dedups_case_insensitively_preserving_order(self):
+        self.assertEqual(gp.assemble_terms("Kristen", ["kristen", "KRISTEN", "Bonds"]),
+                         ["Kristen", "Bonds"])
+
+    def test_drops_blanks_and_handles_none(self):
+        self.assertEqual(gp.assemble_terms("  ", ["", "pocket"], None), ["pocket"])
+
+
 class RateLimitTests(unittest.TestCase):
     def test_429_triggers_backoff_not_error(self):
         class Resp:
