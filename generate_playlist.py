@@ -213,6 +213,11 @@ class PlaylistBuilder:
     stop_flag: threading.Event = field(default_factory=threading.Event)
     # Current Genius backoff (seconds); grows on 429, resets on success.
     genius_backoff: float = 0.0
+    # Optional persistent lyric cache (a LyricStore); None -> no caching.
+    lyric_store: object = None
+    # True when the last fetch failed transiently (error/429) rather than
+    # authoritatively returning no lyrics -- so we don't cache it as "no lyrics".
+    _last_fetch_error: bool = False
 
     # -- progress + control seams ------------------------------------------ #
     def emit(self, kind: str, message: str = "", **data) -> None:
@@ -328,13 +333,41 @@ class PlaylistBuilder:
             self.emit("error", "Error {} ({}: {})".format(context, type(exc).__name__, exc),
                       error=type(exc).__name__)
 
-    # -- lyric + spotify lookups ------------------------------------------ #
+    # -- lyric lookups (cache-aware) -------------------------------------- #
+    def cached_lyrics(self, title: str, artist: str, url: Optional[str] = None) -> str:
+        """Return a song's lyrics, using the persistent cache when available.
+
+        On a cache hit, no Genius call is made. On a miss, fetches (via the
+        Genius search or the given lyric URL) and stores the result -- including
+        an authoritative "no lyrics" so junk isn't re-fetched. A transient
+        failure (error/429) is NOT cached, so it can be retried later.
+        """
+        key = "\x1f".join(song_key(title, artist))
+        store = self.lyric_store
+        if store is not None:
+            record = store.get(key)
+            if record is not None:
+                self.emit("cache", "cache hit: {} - {}".format(title, artist),
+                          title=title, artist=artist)
+                return record.get("lyrics") or ""
+
+        lyrics = self.fetch_lyrics_by_url(url) if url else self.get_lyrics_from_genius(title, artist)
+
+        if store is not None and not self._last_fetch_error:
+            store.put({
+                "song_key": key, "title": title, "artist": artist,
+                "lyrics": lyrics, "has_lyrics": bool(lyrics),
+            })
+        return lyrics
+
     def get_lyrics_from_genius(self, title: str, artist: str) -> str:
         try:
             song = self.genius.search_song(title, artist=artist, get_full_info=False)
         except Exception as exc:
             self._handle_genius_error(exc, "fetching lyrics for {} - {}".format(title, artist))
+            self._last_fetch_error = True
             return ""
+        self._last_fetch_error = False
         self.genius_backoff = 0.0  # success -> stop backing off
         if song is None:
             return ""
@@ -345,7 +378,9 @@ class PlaylistBuilder:
             text = self.genius.lyrics(song_url=url)
         except Exception as exc:
             self._handle_genius_error(exc, "fetching lyrics from {}".format(url))
+            self._last_fetch_error = True
             return ""
+        self._last_fetch_error = False
         self.genius_backoff = 0.0
         return clean_genius_lyrics(text)
 
@@ -439,7 +474,7 @@ class PlaylistBuilder:
                     break
                 title = song["name"]
                 artist = song["artists"][0]["name"]
-                lyrics = self.get_lyrics_from_genius(title, artist)
+                lyrics = self.cached_lyrics(title, artist)
                 if self.evaluate_match(title, artist, lyrics):
                     self.add_song(song["id"], title, artist, lyrics=lyrics)
             if self.should_stop():
@@ -475,7 +510,7 @@ class PlaylistBuilder:
                 result = hit["result"]
                 title = result["title"]
                 artist = result["primary_artist"].get("name")
-                lyrics = self.fetch_lyrics_by_url(result["url"])
+                lyrics = self.cached_lyrics(title, artist, url=result["url"])
                 if not self.evaluate_match(title, artist, lyrics):
                     continue
                 track_id, reason = self.resolve_spotify_track(title, artist)
@@ -597,8 +632,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--spotify", "-sp", default="True",
                         help="Discover songs via Spotify title search")
-    parser.add_argument("--genius", "-g", default="False",
-                        help="Also discover via Genius search (off by default; lyrics always use Genius)")
+    parser.add_argument("--genius", "-g", default="True",
+                        help="Also discover via Genius search (lyrics always use Genius)")
     parser.add_argument(
         "--spotifyPage", "-spp", default=0, type=int,
         help="Starting Spotify search offset (for resuming an interrupted run)",
@@ -619,11 +654,17 @@ def main(argv: Optional[list[str]] = None) -> None:
     sp = build_spotify_client()
     genius = build_genius_client()
 
+    from lyric_store import build_lyric_store
+    store = build_lyric_store()  # Postgres if DATABASE_URL is set, else None
+    if store is not None:
+        print("Lyric cache: connected")
+
     builder = PlaylistBuilder(
         sp=sp,
         genius=genius,
         searches=searches,
         threshold=args.bangerThreshold,
+        lyric_store=store,
     )
 
     builder.playlist_id = resolve_playlist(sp, builder, args)

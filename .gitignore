@@ -1,6 +1,11 @@
 # Spotify OAuth token cache -- SECRET, never commit
 cache.txt
 
+# Local lyric cache (if ever using a SQLite fallback) and its WAL sidecars
+cache.db
+cache.db-wal
+cache.db-shm
+
 # Python
 __pycache__/
 *.py[cod]

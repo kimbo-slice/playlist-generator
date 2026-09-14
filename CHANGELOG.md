@@ -1,5 +1,19 @@
 # Changelog
 
+## Fetch-once lyric cache (Postgres corpus)
+- New `lyric_store.py`: a `LyricStore` interface with `InMemoryLyricStore`
+  (tests) and `PostgresLyricStore` (cloud corpus; psycopg imported lazily).
+  `build_lyric_store()` returns Postgres when `DATABASE_URL` is set, else None.
+- `PlaylistBuilder.cached_lyrics()` checks the store before any Genius fetch and
+  writes results back -- including authoritative "no lyrics" (negative caching)
+  so junk is never re-fetched. Transient errors/429s are NOT cached, so they can
+  be retried. Keyed by `song_key`, so remixes/`feat.` variants share one entry.
+- Re-enabled Genius discovery by default now that the cache makes both engines
+  affordable.
+- `SETUP_DATABASE.md`: one-time Neon/Supabase setup. `cache.db*` gitignored;
+  `psycopg[binary]` added. +6 offline tests (62 total). No `DATABASE_URL` set ->
+  unchanged behavior (no caching).
+
 ## Matching quality: strip Genius scaffolding
 - `clean_genius_lyrics` now removes the "<Title> Lyrics" header, contributor
   preamble, and bracketed section/speaker labels (`[Chorus]`, `[Kristen:]`)

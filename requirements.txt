@@ -6,5 +6,8 @@ lyricsgenius
 fastapi
 uvicorn[standard]
 
+# Lyric cache (cloud Postgres corpus); only needed when DATABASE_URL is set
+psycopg[binary]
+
 # Test-only (web plumbing tests use TestClient)
 httpx

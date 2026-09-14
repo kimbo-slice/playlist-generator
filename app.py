@@ -38,7 +38,7 @@ class RunParams(BaseModel):
     title: Optional[str] = None
     threshold: float = 3.0
     spotify: bool = True    # Spotify title search as the discovery engine
-    genius: bool = False    # Genius as a discovery engine (mediocre); lyrics always use Genius
+    genius: bool = True     # Genius as a discovery engine; lyrics always use Genius
     matches: Optional[List[str]] = None
 
 
@@ -76,15 +76,17 @@ def default_executor(run: Run) -> None:
     from generate_playlist import (
         PlaylistBuilder, build_spotify_client, build_genius_client, resolve_playlist,
     )
+    from lyric_store import build_lyric_store
 
     p = run.params
     searches = p.matches if p.matches else [p.query]
     sp = build_spotify_client()
     genius = build_genius_client()
+    store = build_lyric_store()  # Postgres if DATABASE_URL is set, else None
 
     builder = PlaylistBuilder(
         sp=sp, genius=genius, searches=searches, threshold=p.threshold,
-        on_event=run.emit, stop_flag=run.stop_flag,
+        on_event=run.emit, stop_flag=run.stop_flag, lyric_store=store,
     )
     args = SimpleNamespace(playlistId=None, title=p.title, query=p.query)
     builder.playlist_id = resolve_playlist(sp, builder, args)
