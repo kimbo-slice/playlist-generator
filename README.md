@@ -31,3 +31,8 @@ As a general rule, the help command will give you information about parameters t
 Let's say you want to make a playlist about, say, hotdogs. The following command will do a search for hotdogs and create a playlist called "hotdog playlist". If a playlist called "hotdog playlist" already exists in your Spotify account, it will add the songs from the search to the preexisting list. There is some logic that prevents duplicates, but if there is a song that exists by the same artist on multiple albums (ie - same song with multiple Spotify song IDs), duplicates can happen
 
     python3 generate_playlist.py -q hotdogs -t 'hotdog playlist'
+
+# Data sources
+* [Spotify](https://developer.spotify.com/documentation/web-api) - song search and playlists
+* [Genius](https://genius.com) - lyrics
+* [GetSongBPM](https://getsongbpm.com) - tempo (BPM) and musical key, used for ordering playlists (in progress)
