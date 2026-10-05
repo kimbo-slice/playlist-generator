@@ -20,11 +20,13 @@ import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+import tracklist
 
 HERE = Path(__file__).parent
 
@@ -42,10 +44,21 @@ class RunParams(BaseModel):
     matches: Optional[List[str]] = None
 
 
+class TracklistParams(BaseModel):
+    text: str                     # one track per line, "Title - Artist"
+    title: Optional[str] = None   # name of the playlist to create
+    dry_run: bool = False         # look the tracks up but create nothing
+    known: Optional[Dict[str, str]] = None   # line -> track id, from a loaded playlist
+
+
+class PlaylistLink(BaseModel):
+    link: str
+
+
 class Run:
     """A single playlist-building run and its collected progress events."""
 
-    def __init__(self, run_id: str, params: RunParams):
+    def __init__(self, run_id: str, params: BaseModel):
         self.id = run_id
         self.params = params
         self.events: List[dict] = []
@@ -106,6 +119,27 @@ def default_executor(run: Run) -> None:
     builder.report_misses()
 
 
+def _spotify_client():
+    """Spotify client for list runs; a seam so tests can swap in a fake."""
+    from generate_playlist import build_spotify_client
+
+    return build_spotify_client()
+
+
+def tracklist_executor(run: Run) -> None:
+    """Look up a pasted track list and write it to a new playlist, in order."""
+    p = run.params
+
+    def emit(kind: str, message: str, **data) -> None:
+        run.emit({"kind": kind, "message": message, **data})
+
+    summary = tracklist.run(
+        _spotify_client(), p.text, title=p.title, dry_run=p.dry_run,
+        emit=emit, should_stop=run.should_stop, known=p.known,
+    )
+    run.playlist_id = summary["playlist_id"]
+
+
 def _run_thread(run: Run, executor) -> None:
     try:
         executor(run)
@@ -125,11 +159,12 @@ class Manager:
         self.run: Optional[Run] = None
         self.executor = default_executor  # swappable (tests, hosting)
 
-    def start(self, params: RunParams) -> Run:
+    def start(self, params: BaseModel, executor=None) -> Run:
         if self.run is not None and self.run.status == "running":
             raise HTTPException(status_code=409, detail="A run is already in progress.")
         run = Run(uuid.uuid4().hex, params)
-        run.thread = threading.Thread(target=_run_thread, args=(run, self.executor), daemon=True)
+        run.thread = threading.Thread(
+            target=_run_thread, args=(run, executor or self.executor), daemon=True)
         self.run = run
         run.thread.start()
         return run
@@ -161,6 +196,33 @@ def index():
 def start_run(params: RunParams):
     run = manager.start(params)
     return {"run_id": run.id, "status": run.status}
+
+
+@app.post("/api/tracklist")
+def start_tracklist(params: TracklistParams):
+    if not tracklist.parse_tracklist(params.text):
+        raise HTTPException(status_code=400, detail="The track list is empty.")
+    if not params.dry_run and not (params.title or "").strip():
+        raise HTTPException(status_code=400, detail="Give the playlist a title.")
+    run = manager.start(params, executor=tracklist_executor)
+    return {"run_id": run.id, "status": run.status}
+
+
+@app.post("/api/playlist-tracks")
+def playlist_tracks(params: PlaylistLink):
+    """Read an existing playlist's tracks, in order, for the Track list box."""
+    playlist_id = tracklist.parse_playlist_id(params.link)
+    if playlist_id is None:
+        raise HTTPException(status_code=400, detail="That doesn't look like a Spotify playlist link.")
+    try:
+        name, tracks = tracklist.fetch_playlist(_spotify_client(), playlist_id)
+    except Exception as exc:  # noqa: BLE001 -- report whatever Spotify said
+        raise HTTPException(
+            status_code=502,
+            detail="Spotify wouldn't return that playlist ({}). "
+                   "Private playlists can't be read yet.".format(type(exc).__name__),
+        )
+    return {"playlist_id": playlist_id, "name": name, "tracks": tracks}
 
 
 @app.post("/api/stop")

@@ -8,13 +8,25 @@
   :root { --bg:#121212; --panel:#181818; --line:#282828; --text:#e8e8e8;
           --muted:#9a9a9a; --green:#1db954; --red:#e0554e; --orange:#e0a44e; }
   * { box-sizing: border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
-         background:var(--bg); color:var(--text); }
+         background:var(--bg); color:var(--text);
+         display:flex; flex-direction:column; height:100vh; }
   header { padding:16px 20px; border-bottom:1px solid var(--line); }
   header h1 { margin:0; font-size:18px; font-weight:700; }
   header p { margin:4px 0 0; color:var(--muted); font-size:12px; }
+  .bar { display:flex; align-items:center; gap:10px; padding:10px 20px 0; background:var(--panel); }
+  .modes { display:flex; gap:4px; }
+  .mode { background:transparent; color:var(--muted); border-radius:8px 8px 0 0;
+          padding:8px 14px; border-bottom:2px solid transparent; }
+  .mode.active { color:var(--text); border-bottom-color:var(--green); }
   .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:end;
               padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .field.grow { flex:1 1 320px; }
+  .source { flex:1 1 100%; display:flex; gap:10px; align-items:end; }
+  textarea { background:#0e0e0e; border:1px solid var(--line); color:var(--text);
+             border-radius:6px; padding:8px 10px; resize:vertical; width:100%;
+             font:12.5px/1.5 SFMono-Regular,Menlo,monospace; }
   .field { display:flex; flex-direction:column; gap:4px; }
   .field label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
   input[type=text], input[type=number] { background:#0e0e0e; border:1px solid var(--line);
@@ -25,8 +37,8 @@
   .checks label { font-size:13px; color:var(--text); text-transform:none; letter-spacing:0; }
   button { border:none; border-radius:20px; padding:9px 18px; font-size:14px;
            font-weight:600; cursor:pointer; }
-  #start { background:var(--green); color:#000; }
-  #stop  { background:#333; color:var(--text); }
+  .primary { background:var(--green); color:#000; }
+  .secondary, #stop { background:#333; color:var(--text); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   .status { margin-left:auto; font-size:13px; color:var(--muted); }
   .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
@@ -35,15 +47,17 @@
   .dot.error { background:var(--red); } .dot.complete { background:var(--green); }
   .dot.stopped { background:var(--orange); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-  main { display:grid; grid-template-columns:1fr 380px; gap:0; height:calc(100vh - 132px); }
-  @media (max-width:820px){ main{ grid-template-columns:1fr; height:auto; } }
+  main { display:grid; grid-template-columns:1fr 380px; gap:0; flex:1; min-height:0; }
+  @media (max-width:820px){ body{ height:auto; min-height:100vh; }
+                            main{ grid-template-columns:1fr; } }
   #console { overflow:auto; padding:14px 18px; font:12.5px/1.6 SFMono-Regular,Menlo,monospace;
              white-space:pre-wrap; word-break:break-word; }
-  #console .added  { color:var(--green); }
+  #console .added, #console .found { color:var(--green); }
   #console .miss   { color:var(--orange); }
   #console .error  { color:var(--red); }
   #console .below, #console .duplicate { color:var(--muted); }
-  #console .search, #console .progress, #console .summary, #console .done { color:#7fbfff; }
+  #console .search, #console .progress, #console .summary, #console .done,
+  #console .playlist { color:#7fbfff; }
   aside { border-left:1px solid var(--line); background:var(--panel); padding:14px;
           display:flex; flex-direction:column; gap:10px; }
   aside .head { display:flex; align-items:center; justify-content:space-between; }
@@ -65,7 +79,16 @@
   <p>Give a term, watch songs get matched by their lyrics, and hear the playlist build.</p>
 </header>
 
-<div class="controls">
+<div class="bar">
+  <div class="modes">
+    <button class="mode active" id="modeSearch">Search lyrics</button>
+    <button class="mode" id="modeList">Track list</button>
+  </div>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">idle</span></div>
+  <button id="stop" disabled>⏹ Stop</button>
+</div>
+
+<div class="controls" id="searchControls">
   <div class="field">
     <label for="query" title="Comma-separate several terms; each is searched, all are matched">Search terms</label>
     <input type="text" id="query" placeholder="e.g. kristen, kristin, bonds, pocket" value="">
@@ -85,9 +108,27 @@
       <label><input type="checkbox" id="genius" checked> Genius search</label>
     </div>
   </div>
-  <button id="start">▶ Start</button>
-  <button id="stop" disabled>⏹ Stop</button>
-  <div class="status"><span class="dot" id="dot"></span><span id="statusText">idle</span></div>
+  <button id="start" class="primary go">▶ Start</button>
+</div>
+
+<div class="controls" id="listControls" hidden>
+  <div class="source">
+    <div class="field grow">
+      <label for="sourceLink" title="Loads that playlist's tracks into the box below, in order, so you can rearrange them">Start from an existing playlist (optional)</label>
+      <input type="text" id="sourceLink" placeholder="Paste a Spotify playlist link">
+    </div>
+    <button id="loadList" class="secondary">Load tracks</button>
+  </div>
+  <div class="field grow">
+    <label for="tracks" title="Artist - Title works too; numbering and blank lines are ignored">Tracks, one per line, in the order you want</label>
+    <textarea id="tracks" rows="6" placeholder="Title - Artist&#10;Title - Artist&#10;..."></textarea>
+  </div>
+  <div class="field">
+    <label for="listTitle">Playlist title</label>
+    <input type="text" id="listTitle" placeholder="e.g. Bike ride">
+  </div>
+  <button id="createList" class="primary go">▶ Create playlist</button>
+  <button id="checkList" class="secondary go" title="Look the tracks up without creating a playlist">Check only</button>
 </div>
 
 <main>
@@ -104,6 +145,8 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let cursor = 0, polling = null, playlistId = null, playerMounted = false;
+let emptyState = "empty";  // which player message to show if a run ends with no playlist
+const known = {};          // line -> Spotify track id, for tracks loaded from a playlist
 
 const PLAYER_STATES = {
   idle: '<div class="player-state"><div class="icon">🎧</div>'
@@ -112,6 +155,8 @@ const PLAYER_STATES = {
       + '<div>Building your playlist…<br>the player loads when the first track lands.</div></div>',
   empty: '<div class="player-state"><div class="icon">🕳️</div>'
       + '<div>No songs were added.<br>Try a lower threshold or another term.</div></div>',
+  noPlaylist: '<div class="player-state"><div class="icon">📋</div>'
+      + '<div>No playlist was created.<br>See the console for what was found.</div></div>',
 };
 function renderPlayer(state) { $("playerWrap").innerHTML = PLAYER_STATES[state]; }
 
@@ -181,16 +226,38 @@ async function poll() {
   if (done) {
     finish();
     if (playerMounted) refreshPlayer();
-    else renderPlayer("empty");
+    else renderPlayer(emptyState);
   } else {
     setStatus(data.status);
   }
 }
 
+function setRunning(running) {
+  document.querySelectorAll(".go").forEach((b) => { b.disabled = running; });
+  $("stop").disabled = !running;
+}
+
 function finish() {
   clearInterval(polling); polling = null;
-  $("start").disabled = false;
-  $("stop").disabled = true;
+  setRunning(false);
+}
+
+// Shared by both modes: reset the console/player, POST the run, start polling.
+async function begin(url, body, emptyKey) {
+  $("console").innerHTML = ""; cursor = 0; playlistId = null; playerMounted = false;
+  emptyState = emptyKey;
+  renderPlayer("idle"); $("refresh").disabled = true;
+  setRunning(true);
+  setStatus("running");
+  const r = await fetch(url, {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    line({kind:"error", message:"Could not start: " + (e.detail || r.status)});
+    finish(); setStatus("error"); return;
+  }
+  polling = setInterval(poll, 400);
 }
 
 async function start() {
@@ -202,19 +269,54 @@ async function start() {
     genius: $("genius").checked,
   };
   if (!body.query) { alert("Enter a search term first."); return; }
-  $("console").innerHTML = ""; cursor = 0; playlistId = null; playerMounted = false;
-  renderPlayer("idle"); $("refresh").disabled = true;
-  $("start").disabled = true; $("stop").disabled = false;
-  setStatus("running");
-  const r = await fetch("/api/run", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({}));
-    line({kind:"error", message:"Could not start: " + (e.detail || r.status)});
-    finish(); setStatus("error"); return;
+  await begin("/api/run", body, "empty");
+}
+
+async function startList(dryRun) {
+  const body = {
+    text: $("tracks").value,
+    title: $("listTitle").value.trim() || null,
+    dry_run: dryRun,
+    known: known,   // loaded lines keep their exact track, no name search
+  };
+  if (!body.text.trim()) { alert("Paste some tracks first."); return; }
+  if (!dryRun && !body.title) { alert("Give the playlist a title."); return; }
+  await begin("/api/tracklist", body, "noPlaylist");
+}
+
+// Pull an existing playlist's tracks into the box (appended, never overwriting).
+async function loadPlaylist() {
+  const link = $("sourceLink").value.trim();
+  if (!link) { alert("Paste a playlist link first."); return; }
+  $("loadList").disabled = true;
+  try {
+    const r = await fetch("/api/playlist-tracks", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({link}),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      line({kind:"error", message:"Could not load that playlist: " + (data.detail || r.status)});
+      return;
+    }
+    data.tracks.forEach((t) => { if (t.id) known[t.line] = t.id; });
+    const box = $("tracks");
+    const existing = box.value.replace(/\s+$/, "");
+    box.value = (existing ? existing + "\n" : "") + data.tracks.map((t) => t.line).join("\n");
+    line({kind:"summary", message:"Loaded " + data.tracks.length + " track(s) from \""
+                                   + data.name + "\" into the box. Reorder them, then create."});
+  } catch (err) {
+    line({kind:"error", message:"Could not load that playlist: " + err});
+  } finally {
+    $("loadList").disabled = false;
   }
-  polling = setInterval(poll, 400);
+}
+
+function setMode(mode) {
+  const list = mode === "list";
+  $("searchControls").hidden = list;
+  $("listControls").hidden = !list;
+  $("modeSearch").classList.toggle("active", !list);
+  $("modeList").classList.toggle("active", list);
 }
 
 async function stop() {
@@ -223,6 +325,12 @@ async function stop() {
 }
 
 $("start").onclick = start;
+$("createList").onclick = () => startList(false);
+$("checkList").onclick = () => startList(true);
+$("loadList").onclick = loadPlaylist;
+$("sourceLink").addEventListener("keydown", (e) => { if (e.key === "Enter") loadPlaylist(); });
+$("modeSearch").onclick = () => setMode("search");
+$("modeList").onclick = () => setMode("list");
 $("stop").onclick = stop;
 $("refresh").onclick = refreshPlayer;
 $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });

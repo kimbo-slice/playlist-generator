@@ -1,5 +1,25 @@
 # Changelog
 
+## Track list -> playlist (`tracklist.py`)
+- New `tracklist.py`: give it one track per line ("Title - Artist") and it finds
+  each on Spotify with the generator's verified matching, then writes them to a
+  playlist in the order given. First step toward vibe ordering.
+- New playlist (`-t`), append to an existing one (`-p`), overwrite in place
+  (`-p ... --replace`), or `--dry-run` to resolve without touching anything.
+- Forgiving input: "Artist - Title" is tried as a fallback, artist is optional,
+  numbering/bullets/comments are ignored. Unfound and duplicate lines are
+  reported, and a list that resolves to nothing never creates or wipes a playlist.
+- In the web UI: a "Track list" tab (paste tracks, name the playlist, "Create
+  playlist" or "Check only") backed by `POST /api/tracklist`. It shares the
+  console, Stop button and player with the lyric search; Stop cancels without
+  creating anything. Append/replace on an existing playlist is CLI-only for now.
+- Start from an existing playlist: paste a Spotify playlist link and "Load
+  tracks" fills the box with its tracks in order (`POST /api/playlist-tracks`).
+  Loaded lines remember their exact Spotify track, so a reordered list is
+  written back as the same tracks with no name search; edited or new lines
+  fall back to the normal lookup.
+- +34 offline tests (tool + endpoints).
+
 ## Multi-term search + dedup pre-check
 - Search several terms at once: comma-separate them in the UI query field, or
   pass `-q` + `-m` on the CLI. `assemble_terms()` flattens/splits/de-dupes them;
