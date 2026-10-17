@@ -16,6 +16,7 @@ Run it:
 
 from __future__ import annotations
 
+import os
 import threading
 import uuid
 from pathlib import Path
@@ -26,6 +27,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+import reorder
 import tracklist
 
 HERE = Path(__file__).parent
@@ -49,6 +51,12 @@ class TracklistParams(BaseModel):
     title: Optional[str] = None   # name of the playlist to create
     dry_run: bool = False         # look the tracks up but create nothing
     known: Optional[Dict[str, str]] = None   # line -> track id, from a loaded playlist
+
+
+class ReorderParams(BaseModel):
+    text: str                                # one track per line, "Title - Artist"
+    known: Optional[Dict[str, str]] = None   # line -> track id, from a loaded playlist
+    tempos: Optional[Dict[str, float]] = None   # line -> BPM the user typed in
 
 
 class PlaylistLink(BaseModel):
@@ -140,6 +148,59 @@ def tracklist_executor(run: Run) -> None:
     run.playlist_id = summary["playlist_id"]
 
 
+# Every tempo answer so far (see reorder.lookup), so reordering again after
+# typing in a missing tempo doesn't ask the services about every track twice.
+_tempo_cache: dict = {}
+
+
+def reorder_executor(run: Run) -> None:
+    """Look a track list up, get tempos, and emit the list in its new order.
+
+    Changes nothing on Spotify. The final "reorder" event carries the new text
+    for the Track list box and the tracks that still need a tempo from the user.
+    """
+    p = run.params
+
+    def emit(kind: str, message: str, **data) -> None:
+        run.emit({"kind": kind, "message": message, **data})
+
+    entries = tracklist.parse_tracklist(p.text)
+    emit("search", "Looking up {} track(s) on Spotify...".format(len(entries)))
+    resolved, skipped = tracklist.resolve_tracklist(
+        _spotify_client(), entries, emit=emit, should_stop=run.should_stop, known=p.known)
+    if run.should_stop():
+        return
+    tracks = [{"line": label, "id": track_id} for track_id, label in resolved]
+
+    api_key = os.environ.get("GETSONGBPM_API_KEY")
+    emit("search", "\nGetting tempos (the first time takes about a second per track)...")
+    recco, gsb = reorder.lookup(tracks, api_key, log=lambda message: emit("error", message),
+                                should_stop=run.should_stop, cache=_tempo_cache)
+    if run.should_stop():
+        return
+
+    clips = reorder.measure_missing(
+        tracks, recco, gsb, log=lambda message: emit("error", message),
+        progress=lambda message: emit("search", message),
+        should_stop=run.should_stop, cache=_tempo_cache)
+    if run.should_stop():
+        return
+
+    ordered, unplaced = reorder.plan(tracks, recco, gsb, overrides=p.tempos, clips=clips)
+    reorder.report(ordered, unplaced, cross_checked=bool(api_key), paste=False,
+                   log=lambda message: emit("tempo", message))
+
+    lines = reorder.paste_lines(ordered, unplaced)
+    not_found = [miss["line"] for miss in skipped if miss["reason"] != "duplicate"]
+    if not_found:
+        lines += ["# Not found on Spotify"] + not_found
+    emit("reorder", "\nThe track list box now holds the new order.",
+         text="\n".join(lines),
+         known={track["line"]: track["id"] for track in tracks},
+         needs=[{"line": e.line, "flag": e.flag, "readings": [round(r) for r in e.readings]}
+                for e in ordered + unplaced if e.flag])
+
+
 def _run_thread(run: Run, executor) -> None:
     try:
         executor(run)
@@ -205,6 +266,14 @@ def start_tracklist(params: TracklistParams):
     if not params.dry_run and not (params.title or "").strip():
         raise HTTPException(status_code=400, detail="Give the playlist a title.")
     run = manager.start(params, executor=tracklist_executor)
+    return {"run_id": run.id, "status": run.status}
+
+
+@app.post("/api/reorder")
+def start_reorder(params: ReorderParams):
+    if not tracklist.parse_tracklist(params.text):
+        raise HTTPException(status_code=400, detail="The track list is empty.")
+    run = manager.start(params, executor=reorder_executor)
     return {"run_id": run.id, "status": run.status}
 
 

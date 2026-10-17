@@ -35,4 +35,6 @@ Let's say you want to make a playlist about, say, hotdogs. The following command
 # Data sources
 * [Spotify](https://developer.spotify.com/documentation/web-api) - song search and playlists
 * [Genius](https://genius.com) - lyrics
-* [GetSongBPM](https://getsongbpm.com) - tempo (BPM) and musical key, used for ordering playlists (in progress)
+* [ReccoBeats](https://reccobeats.com) - tempo (BPM) and musical key, used for ordering playlists
+* [GetSongBPM](https://getsongbpm.com) - tempo (BPM) and musical key, used for ordering playlists
+* [Deezer](https://developers.deezer.com) - 30-second preview clips, measured with [librosa](https://librosa.org) for tracks neither tempo service knows

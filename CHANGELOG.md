@@ -1,5 +1,27 @@
 # Changelog
 
+## Reorder by tempo and key
+- "Reorder by tempo + key" button in the Track list tab (`POST /api/reorder`) and
+  `reorder.py` on the command line: reads a playlist or list, gets each track's
+  tempo and key, and puts the list in an order that steps smoothly. Changes only
+  the box (or prints a list); nothing on Spotify until you create a playlist.
+- Tempo and key come from ReccoBeats (by Spotify id, no key needed), cross-checked
+  against GetSongBPM (by name, free key, backlink in the README) in
+  `tempo_sources.py`. Every tempo is folded into 70-140 BPM so half/double
+  readings compare equal; tracks where the two still disagree are flagged, and
+  you can pick a reading or type a tempo (remembered in your browser).
+- Fallback for tracks neither service knows (`audio_analysis.py`): tempo measured
+  from the track's 30-second Deezer preview with librosa; the clip is deleted
+  after measuring. Tempo only -- key from a clip proved too unreliable (right
+  about 4 times in 10). Tested against tempos both databases agree on: 32 of 36
+  within 2%. Tracks with no data at all go to a "place by hand" pile.
+- Ordering rule (`vibe_order.py`): transition cost = tempo gap + steps apart on
+  the circle of fifths (1 key step = 3% tempo), with a small cost for switching
+  between half- and double-time; greedy chain from the slowest track, then a
+  clean-up pass. Deterministic.
+- `bpm_probe.py` reports how many of a playlist's tracks each service knows.
+- +86 offline tests (178 total; the suite passes with the network blocked).
+
 ## Track list -> playlist (`tracklist.py`)
 - New `tracklist.py`: give it one track per line ("Title - Artist") and it finds
   each on Spotify with the generator's verified matching, then writes them to a

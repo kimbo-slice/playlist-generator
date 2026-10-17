@@ -16,6 +16,9 @@ circle-of-fifths key moves (they don't have to match, just not be jarring).
 - Fallback candidate: **GetSongBPM API** (free, gives BPM *and* key, needs an
   attribution backlink). Deezer gives BPM only.
 - Store bpm/key on the per-song record (see #5) so ordering is a pure local read.
+- **In the UI, let the user type in the tempo for a track neither service knows**
+  (and pick a reading when the two disagree), remembered per track. `reorder.py`
+  lists those tracks last today; e.g. Fleetwood Mac's "Black Magic Woman".
 
 ## 3. Own fetch-once lyric cache / index  *(original goal #5, the enabler)*
 A local store so each song's lyrics are fetched **once, ever** -- across runs

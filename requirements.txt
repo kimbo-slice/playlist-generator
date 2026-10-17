@@ -9,5 +9,8 @@ uvicorn[standard]
 # Lyric cache (cloud Postgres corpus); only needed when DATABASE_URL is set
 psycopg[binary]
 
+# Tempo from preview clips, for tracks no tempo service knows (optional)
+librosa
+
 # Test-only (web plumbing tests use TestClient)
 httpx

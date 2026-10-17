@@ -56,8 +56,17 @@
   #console .miss   { color:var(--orange); }
   #console .error  { color:var(--red); }
   #console .below, #console .duplicate { color:var(--muted); }
-  #console .search, #console .progress, #console .summary, #console .done,
+  #console .tempo { color:var(--text); }
+  #console .search, #console .progress, #console .reorder, #console .summary, #console .done,
   #console .playlist { color:#7fbfff; }
+  #needs { padding:12px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  #needs h3 { margin:0 0 8px; font-size:13px; }
+  #needs .need { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:4px 0; }
+  #needs .need .name { flex:1 1 260px; }
+  #needs .need .why { color:var(--orange); font-size:12px; }
+  #needs button.pick { background:#2a2a2a; color:var(--text); padding:4px 12px; font-size:12px; }
+  #needs .actions { display:flex; gap:10px; align-items:center; margin-top:10px; }
+  #needs .actions span { color:var(--muted); font-size:12px; }
   aside { border-left:1px solid var(--line); background:var(--panel); padding:14px;
           display:flex; flex-direction:column; gap:10px; }
   aside .head { display:flex; align-items:center; justify-content:space-between; }
@@ -129,6 +138,18 @@
   </div>
   <button id="createList" class="primary go">▶ Create playlist</button>
   <button id="checkList" class="secondary go" title="Look the tracks up without creating a playlist">Check only</button>
+  <button id="reorderList" class="secondary go" title="Put the tracks in an order that flows by tempo and key. Changes only the box above, nothing on Spotify">Reorder by tempo + key</button>
+</div>
+
+<div id="needs" hidden>
+  <h3 id="needsTitle"></h3>
+  <div id="needsRows"></div>
+  <div class="actions">
+    <button id="applyTempos" class="primary go">Reorder again</button>
+    <button id="undoReorder" class="secondary">Undo reorder</button>
+    <button id="forgetTempos" class="secondary" title="Clear every tempo you have typed in">Forget my tempos</button>
+    <span id="temposNote"></span>
+  </div>
 </div>
 
 <main>
@@ -147,6 +168,17 @@ const $ = (id) => document.getElementById(id);
 let cursor = 0, polling = null, playlistId = null, playerMounted = false;
 let emptyState = "empty";  // which player message to show if a run ends with no playlist
 const known = {};          // line -> Spotify track id, for tracks loaded from a playlist
+let beforeReorder = null;  // the box's text before the last reorder, for Undo
+
+// Tempos you typed in for tracks the services don't know, kept in this browser.
+const tempoKey = (text) => text.toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+function loadTempos() {
+  try { return JSON.parse(localStorage.getItem("tempos") || "{}") || {}; } catch (e) { return {}; }
+}
+function saveTempos(tempos) {
+  try { localStorage.setItem("tempos", JSON.stringify(tempos)); } catch (e) { /* still works this run */ }
+}
+let myTempos = loadTempos();
 
 const PLAYER_STATES = {
   idle: '<div class="player-state"><div class="icon">🎧</div>'
@@ -214,6 +246,7 @@ async function poll() {
       if (ev.track_count > 0) mountPlayer();
       else if (!playerMounted) renderPlayer("warming");
     }
+    if (ev.kind === "reorder") showReorder(ev);
     // A new add OR a duplicate both mean the playlist has at least one track.
     if (ev.kind === "added" || ev.kind === "duplicate") mountPlayer();
     if (ev.kind === "done") { done = true; setStatus(ev.status || "complete"); }
@@ -284,6 +317,70 @@ async function startList(dryRun) {
   await begin("/api/tracklist", body, "noPlaylist");
 }
 
+async function startReorder() {
+  const text = $("tracks").value;
+  if (!text.trim()) { alert("Paste some tracks first."); return; }
+  collectTempos();
+  $("needs").hidden = true;
+  await begin("/api/reorder", {text: text, known: known, tempos: myTempos}, "noPlaylist");
+}
+
+// Read any tempos typed into the panel and remember them.
+function collectTempos() {
+  document.querySelectorAll("#needsRows input").forEach((input) => {
+    const bpm = parseFloat(input.value);
+    if (bpm > 0) myTempos[tempoKey(input.dataset.line)] = bpm;
+  });
+  saveTempos(myTempos);
+}
+
+// A reorder finished: put the new order in the box and ask about tracks that need a tempo.
+function showReorder(ev) {
+  beforeReorder = $("tracks").value;
+  $("tracks").value = ev.text;
+  Object.assign(known, ev.known || {});
+
+  const rows = $("needsRows");
+  rows.innerHTML = "";
+  (ev.needs || []).forEach((need) => {
+    const row = document.createElement("div"); row.className = "need";
+    const name = document.createElement("span"); name.className = "name"; name.textContent = need.line;
+    const why = document.createElement("span"); why.className = "why"; why.textContent = need.flag;
+    const input = document.createElement("input");
+    input.type = "number"; input.min = "30"; input.max = "300"; input.placeholder = "BPM";
+    input.dataset.line = need.line;
+    row.append(name, why);
+    (need.readings || []).forEach((bpm) => {
+      const pick = document.createElement("button");
+      pick.className = "pick"; pick.textContent = "use " + bpm;
+      pick.onclick = () => { input.value = bpm; };
+      row.append(pick);
+    });
+    row.append(input);
+    rows.append(row);
+  });
+
+  const count = (ev.needs || []).length, saved = Object.keys(myTempos).length;
+  $("needsTitle").textContent = count
+    ? count + " track(s) need a tempo from you. Enter it, then reorder again."
+    : "Every track has a tempo.";
+  $("applyTempos").hidden = !count;
+  $("forgetTempos").hidden = !saved;
+  $("temposNote").textContent = saved ? saved + " tempo(s) you entered are remembered in this browser." : "";
+  $("needs").hidden = false;
+}
+
+function undoReorder() {
+  if (beforeReorder !== null) $("tracks").value = beforeReorder;
+  $("needs").hidden = true;
+}
+
+function forgetTempos() {
+  myTempos = {}; saveTempos(myTempos);
+  $("forgetTempos").hidden = true;
+  $("temposNote").textContent = "Cleared. Reorder again to see the effect.";
+}
+
 // Pull an existing playlist's tracks into the box (appended, never overwriting).
 async function loadPlaylist() {
   const link = $("sourceLink").value.trim();
@@ -327,6 +424,10 @@ async function stop() {
 $("start").onclick = start;
 $("createList").onclick = () => startList(false);
 $("checkList").onclick = () => startList(true);
+$("reorderList").onclick = startReorder;
+$("applyTempos").onclick = startReorder;
+$("undoReorder").onclick = undoReorder;
+$("forgetTempos").onclick = forgetTempos;
 $("loadList").onclick = loadPlaylist;
 $("sourceLink").addEventListener("keydown", (e) => { if (e.key === "Enter") loadPlaylist(); });
 $("modeSearch").onclick = () => setMode("search");
