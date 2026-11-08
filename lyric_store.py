@@ -15,12 +15,27 @@ else ``None`` (no caching -> unchanged behavior).
 
 A record is a plain dict: {song_key, title, artist, spotify_id, lyrics,
 has_lyrics}. bpm/musical_key/mode columns are reserved for vibe ordering.
+
+``songs_mentioning(terms)`` returns cached songs whose lyrics might contain any
+of the terms -- a cheap, generous pre-filter (one word fragment per term, case
+-insensitive); callers score the results exactly with ``match_percentage``.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Optional
+import re
+from typing import Iterable, List, Optional
+
+
+def search_fragment(term: str) -> str:
+    """The longest run of letters/digits in a term, for a substring pre-filter.
+
+    "ain't" -> "ain", "hot dog" -> "hot". Any lyric containing the term, however
+    it is punctuated or spaced, contains this fragment.
+    """
+    pieces = re.findall(r"\w+", term or "")
+    return max(pieces, key=len).lower() if pieces else ""
 
 
 class InMemoryLyricStore:
@@ -35,6 +50,16 @@ class InMemoryLyricStore:
 
     def put(self, record: dict) -> None:
         self._rows[record["song_key"]] = dict(record)
+
+    def remember_track(self, song_key: str, spotify_id: str) -> None:
+        if song_key in self._rows:
+            self._rows[song_key]["spotify_id"] = spotify_id
+
+    def songs_mentioning(self, terms: Iterable[str]) -> List[dict]:
+        fragments = [f for f in (search_fragment(t) for t in terms) if f]
+        return [dict(r) for r in self._rows.values()
+                if r.get("has_lyrics") and r.get("lyrics")
+                and any(f in r["lyrics"].lower() for f in fragments)]
 
     def close(self) -> None:
         pass
@@ -89,6 +114,26 @@ class PostgresLyricStore:
             return None
         keys = ("song_key", "title", "artist", "spotify_id", "lyrics", "has_lyrics")
         return dict(zip(keys, row))
+
+    def remember_track(self, song_key: str, spotify_id: str) -> None:
+        """Save the Spotify track a cached song was placed as (lyrics untouched)."""
+        with self._conn.cursor() as cur:
+            cur.execute("UPDATE songs SET spotify_id = %s WHERE song_key = %s", (spotify_id, song_key))
+
+    def songs_mentioning(self, terms: Iterable[str]) -> List[dict]:
+        fragments = [f for f in (search_fragment(t) for t in terms) if f]
+        if not fragments:
+            return []
+        patterns = ["%" + f.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                    for f in fragments]
+        keys = ("song_key", "title", "artist", "spotify_id", "lyrics", "has_lyrics")
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT song_key, title, artist, spotify_id, lyrics, has_lyrics "
+                "FROM songs WHERE has_lyrics AND lyrics ILIKE ANY(%s)",
+                (patterns,),
+            )
+            return [dict(zip(keys, row)) for row in cur.fetchall()]
 
     def put(self, record: dict) -> None:
         params = {

@@ -42,6 +42,7 @@ class RunParams(BaseModel):
     query: str
     title: Optional[str] = None
     threshold: float = 3.0
+    saved: bool = True      # search the lyric cache first (no lyric requests)
     spotify: bool = True    # Spotify title search as the discovery engine
     genius: bool = True     # Genius as a discovery engine; lyrics always use Genius
     matches: Optional[List[str]] = None
@@ -120,6 +121,8 @@ def default_executor(run: Run) -> None:
     run.emit({"kind": "playlist", "message": "Playlist ready.",
               "playlist_id": builder.playlist_id, "track_count": len(builder.track_ids)})
 
+    if p.saved:
+        builder.from_saved_lyrics()   # all terms at once; no lyric requests
     # Discover candidates for every term; matching still uses the whole set.
     for term in searches:
         if p.spotify:

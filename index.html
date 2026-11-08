@@ -111,8 +111,9 @@
     <input type="number" id="threshold" value="3.0" step="0.1" min="0">
   </div>
   <div class="field">
-    <label title="Lyrics always come from Genius; these pick how songs are discovered">Discover with</label>
+    <label title="Where to look for songs. Saved lyrics needs no lyric lookups at all.">Discover with</label>
     <div class="checks">
+      <label><input type="checkbox" id="saved" checked> Saved lyrics</label>
       <label><input type="checkbox" id="spotify" checked> Spotify search</label>
       <label><input type="checkbox" id="genius" checked> Genius search</label>
     </div>
@@ -299,6 +300,7 @@ async function start() {
     title: $("title").value.trim() || null,
     threshold: parseFloat($("threshold").value),
     spotify: $("spotify").checked,
+    saved: $("saved").checked,
     genius: $("genius").checked,
   };
   if (!body.query) { alert("Enter a search term first."); return; }

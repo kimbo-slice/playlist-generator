@@ -549,6 +549,42 @@ class PlaylistBuilder:
         return matched
 
     # -- search engines ---------------------------------------------------- #
+    def from_saved_lyrics(self) -> None:
+        """Search the lyric cache: every saved song, scored against all the terms.
+
+        No Genius or LRCLIB requests at all -- only Spotify, to place matches
+        that don't have a remembered track yet (the track found is saved back
+        so the next search skips that lookup). Strongest matches go first.
+        """
+        store = self.lyric_store
+        if store is None or not hasattr(store, "songs_mentioning"):
+            self.emit("search", "No lyric cache connected -- skipping saved lyrics", engine="saved")
+            return
+        candidates = store.songs_mentioning(self.searches)
+        self.emit("search", "Searching your saved lyrics ({} possible songs)".format(len(candidates)),
+                  engine="saved", candidates=len(candidates))
+        scored = sorted(((match_percentage(r["lyrics"], self.searches), r) for r in candidates),
+                        key=lambda pair: -pair[0])
+        for _pct, record in scored:
+            if self.should_stop():
+                break
+            title, artist, track_id = record["title"], record["artist"], record.get("spotify_id")
+            if self.already_have(title, artist, track_id):
+                self.emit("duplicate", "Skipping duplicate: {} - {}".format(title, artist),
+                          title=title, artist=artist)
+                continue
+            if not self.evaluate_match(title, artist, record["lyrics"]):
+                break   # sorted by score, so nothing after this clears the threshold
+            if not track_id:
+                track_id, reason = self.resolve_spotify_track(title, artist)
+                if track_id is None:
+                    self.record_miss(title, artist, reason)
+                    continue
+                store.remember_track(record["song_key"], track_id)
+            self.add_song(track_id, title, artist, lyrics=record["lyrics"])
+        self.emit("progress", "Playlist size so far: {}".format(len(self.track_ids)),
+                  playlist_size=len(self.track_ids))
+
     def from_spotify(self, main_search: str, start_offset: int = 0) -> None:
         """Use Spotify as the discovery engine, matching on Genius lyrics."""
         self.emit("search", "Searching Spotify for '{}'".format(main_search), engine="spotify")
@@ -749,6 +785,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--bangerThreshold", "-bt", default=3.0, type=float,
         help="Min percent of lyric text the term must occupy to count as a match",
     )
+    parser.add_argument("--saved", default="True",
+                        help="Search your saved lyrics first (needs DATABASE_URL)")
     parser.add_argument("--spotify", "-sp", default="True",
                         help="Discover songs via Spotify title search")
     parser.add_argument("--genius", "-g", default="True",
@@ -790,6 +828,8 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     builder.playlist_id = resolve_playlist(sp, builder, args)
 
+    if args.saved == "True":
+        builder.from_saved_lyrics()   # all terms at once; no lyric requests
     # Discover candidates for every term; matching still uses the whole set.
     for term in searches:
         if args.spotify == "True":

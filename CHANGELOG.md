@@ -1,5 +1,20 @@
 # Changelog
 
+## Search your saved lyrics
+- New first discovery step, "Saved lyrics" (checkbox in the UI, on by
+  default; `--saved False` on the CLI): every song in the lyric cache is
+  scored against all the search terms at once, strongest matches first.
+  It makes no Genius or LRCLIB requests at all, so it can't be rate limited or
+  blocked; Spotify is only asked to place matches, and the track found is saved
+  back to the cache so the next search skips that lookup too.
+- The cache pre-filters by one word fragment per term (`songs_mentioning`),
+  then scores exactly with the same `match_percentage` as everything else.
+  Tried on the real cache (3,387 songs with lyrics): "pocket" 89 matches,
+  "blue" 144, "kristen, kristin" 16, each in under a second.
+- Online discovery (Spotify, Genius) still runs after it and skips songs the
+  saved search already added.
+- +8 offline tests (220 total, passing with the network blocked).
+
 ## LRCLIB lyrics backup; respect a Genius refusal
 - Genius began refusing this app's website requests (HTTP 403) after Nov 4,
   2026. The app no longer keeps asking: on the first 403 it stops using Genius
