@@ -24,6 +24,7 @@ import re
 import string
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
@@ -32,11 +33,16 @@ from typing import Callable, Iterable, Optional
 # Pure helpers (no network, safe to unit test)
 # --------------------------------------------------------------------------- #
 
-_PUNCTUATION_TABLE = str.maketrans("", "", string.punctuation)
+# ASCII punctuation plus every Unicode punctuation mark in the Basic Multilingual
+# Plane: Genius writes curly apostrophes and quotes (’ “ ”), en dashes and CJK
+# marks, and Spotify/LRCLIB often don't, so "We’re" and "We're" must normalize alike.
+_UNICODE_PUNCTUATION = "".join(
+    chr(cp) for cp in range(0x80, 0x10000) if unicodedata.category(chr(cp)).startswith("P"))
+_PUNCTUATION_TABLE = str.maketrans("", "", string.punctuation + _UNICODE_PUNCTUATION)
 
 # Things that distinguish *releases* of a song but not the song itself.
 _PAREN_RE = re.compile(r"[\(\[][^\)\]]*[\)\]]")          # "(Remastered 2011)", "[Live]"
-_DASH_SUFFIX_RE = re.compile(r"\s-\s.*$")                # " - 2011 Remaster", " - Single Version"
+_DASH_SUFFIX_RE = re.compile(r"\s[-\u2013\u2014]\s.*$")              # " - 2011 Remaster", " - Single Version"
 _FEAT_RE = re.compile(r"\b(?:feat|ft|featuring|with)\b.*", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -149,15 +155,23 @@ def song_key(title: Optional[str], artist: Optional[str]) -> tuple[str, str]:
     Version"`` by ``"Band"`` produce the same key, so they de-duplicate against
     each other even though their Spotify IDs differ.
     """
-    def norm(value: Optional[str]) -> str:
-        value = value or ""
-        value = _PAREN_RE.sub("", value)
-        value = _DASH_SUFFIX_RE.sub("", value)
-        value = _FEAT_RE.sub("", value)
-        return normalize_text(value)
-
     primary_artist = (artist or "").split(",")[0]
-    return (norm(title), norm(primary_artist))
+    return (normalize_text(strip_release_info(title)),
+            normalize_text(strip_release_info(primary_artist)))
+
+
+def strip_release_info(value: Optional[str]) -> str:
+    """Drop release details from a title or artist, keeping its original text.
+
+    ``"Lovesick Blues (Walmart Performance)"`` -> ``"Lovesick Blues"``,
+    ``"Song - 2011 Remaster"`` -> ``"Song"``, ``"Band feat. Guest"`` -> ``"Band"``.
+    Casing and punctuation are kept, so the result still works as a search query.
+    """
+    value = value or ""
+    value = _PAREN_RE.sub("", value)
+    value = _DASH_SUFFIX_RE.sub("", value)
+    value = _FEAT_RE.sub("", value)
+    return _WHITESPACE_RE.sub(" ", value).strip()
 
 
 def lyric_fingerprint(lyrics: Optional[str]) -> Optional[str]:
@@ -249,6 +263,13 @@ class PlaylistBuilder:
     # True when the last fetch failed transiently (error/429) rather than
     # authoritatively returning no lyrics -- so we don't cache it as "no lyrics".
     _last_fetch_error: bool = False
+    # Backup lyrics source used when Genius has no lyrics or refuses us:
+    # ``(title, artist) -> text | "" (instrumental) | None (unknown)``, e.g.
+    # ``lrclib.lookup_lyrics``. None -> Genius only.
+    lyrics_fallback: Optional[Callable[[str, str], Optional[str]]] = None
+    # Set once Genius refuses lyric requests (HTTP 403); it isn't asked again
+    # for the rest of the run.
+    genius_blocked: bool = False
 
     # -- progress + control seams ------------------------------------------ #
     def emit(self, kind: str, message: str = "", **data) -> None:
@@ -358,10 +379,24 @@ class PlaylistBuilder:
             time.sleep(0.5)
             waited += 0.5
 
+    @staticmethod
+    def _is_forbidden(exc: Exception) -> bool:
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) == 403:
+            return True
+        return "403" in str(exc)
+
     def _handle_genius_error(self, exc: Exception, context: str) -> None:
-        """On 429 back off; otherwise surface the (diagnosable) error."""
+        """On 429 back off; on 403 stop asking Genius; otherwise surface the error."""
         if self._is_rate_limited(exc):
             self._genius_cooldown()
+        elif self._is_forbidden(exc):
+            if not self.genius_blocked:
+                self.genius_blocked = True
+                self.emit("error",
+                          "Genius is refusing lyric requests (403). Not asking it again this run"
+                          + ("; using LRCLIB instead." if self.lyrics_fallback else "."),
+                          error="Forbidden")
         else:
             self.emit("error", "Error {} ({}: {})".format(context, type(exc).__name__, exc),
                       error=type(exc).__name__)
@@ -381,10 +416,12 @@ class PlaylistBuilder:
     def cached_lyrics(self, title: str, artist: str, url: Optional[str] = None) -> str:
         """Return a song's lyrics, using the persistent cache when available.
 
-        On a cache hit, no Genius call is made. On a miss, fetches (via the
-        Genius search or the given lyric URL) and stores the result -- including
-        an authoritative "no lyrics" so junk isn't re-fetched. A transient
-        failure (error/429) is NOT cached, so it can be retried later.
+        On a cache hit, nothing is fetched. On a miss, asks Genius (via its
+        search or the given lyric URL) unless Genius has refused us this run,
+        then the backup source (LRCLIB) if Genius came up empty, and stores the
+        result. "No lyrics" is cached only when every source gave a definite
+        answer; a transient failure, or a Genius refusal, is NOT cached, so the
+        song is retried later (and Genius gets another chance if it relents).
         """
         key = "\x1f".join(song_key(title, artist))
         store = self.lyric_store
@@ -395,9 +432,26 @@ class PlaylistBuilder:
                           title=title, artist=artist)
                 return record.get("lyrics") or ""
 
-        lyrics = self.fetch_lyrics_by_url(url) if url else self.get_lyrics_from_genius(title, artist)
+        lyrics, definite = "", True
+        if self.genius_blocked:
+            definite = False
+        else:
+            lyrics = self.fetch_lyrics_by_url(url) if url else self.get_lyrics_from_genius(title, artist)
+            definite = not self._last_fetch_error
+        if not lyrics and self.lyrics_fallback is not None:
+            try:
+                backup = self.lyrics_fallback(title, artist)
+            except Exception as exc:  # noqa: BLE001 -- report, don't cache, keep going
+                self.emit("error", "Error fetching lyrics from LRCLIB for {} - {} ({})".format(
+                    title, artist, type(exc).__name__), error=type(exc).__name__)
+                definite = False
+            else:
+                if backup:
+                    lyrics, definite = backup, True
+                elif backup is None and self.genius_blocked:
+                    definite = False   # unknown to LRCLIB; Genius might know it later
 
-        if store is not None and not self._last_fetch_error:
+        if store is not None and definite:
             store.put({
                 "song_key": key, "title": title, "artist": artist,
                 "lyrics": lyrics, "has_lyrics": bool(lyrics),
@@ -720,6 +774,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     genius = build_genius_client()
 
     from lyric_store import build_lyric_store
+    import lrclib
     store = build_lyric_store()  # Postgres if DATABASE_URL is set, else None
     if store is not None:
         print("Lyric cache: connected")
@@ -730,6 +785,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         searches=searches,
         threshold=args.bangerThreshold,
         lyric_store=store,
+        lyrics_fallback=lrclib.lookup_lyrics,
     )
 
     builder.playlist_id = resolve_playlist(sp, builder, args)

@@ -27,6 +27,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+import lrclib
 import reorder
 import tracklist
 
@@ -109,6 +110,7 @@ def default_executor(run: Run) -> None:
     builder = PlaylistBuilder(
         sp=sp, genius=genius, searches=searches, threshold=p.threshold,
         on_event=run.emit, stop_flag=run.stop_flag, lyric_store=store,
+        lyrics_fallback=lrclib.lookup_lyrics,
     )
     args = SimpleNamespace(playlistId=None, title=p.title, query=p.query)
     builder.playlist_id = resolve_playlist(sp, builder, args)

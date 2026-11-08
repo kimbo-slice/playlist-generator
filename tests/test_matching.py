@@ -203,6 +203,29 @@ class MatchPercentageTests(unittest.TestCase):
         )
 
 
+class UnicodePunctuationTests(unittest.TestCase):
+    """Genius writes curly quotes and en dashes; Spotify and LRCLIB often don't."""
+
+    def test_curly_and_straight_apostrophes_are_the_same_song(self):
+        self.assertEqual(gp.song_key("When We\u2019re Together", "Kristen Bell"),
+                         gp.song_key("When We're Together", "Kristen Bell"))
+        self.assertTrue(gp.is_confident_match("When We're Together", "Kristen Bell",
+                                              "When We\u2019re Together", "Kristen Bell"))
+
+    def test_a_term_with_an_apostrophe_counts_curly_ones_in_lyrics(self):
+        self.assertGreater(gp.match_percentage("I ain\u2019t got time, ain\u2019t no way", ["ain't"]), 0)
+
+    def test_en_dash_release_suffix_is_dropped(self):
+        self.assertEqual(gp.song_key("Song \u2013 Live", "Band"), gp.song_key("Song", "Band"))
+
+    def test_cjk_punctuation_is_stripped_but_letters_are_kept(self):
+        self.assertEqual(gp.normalize_text("\u541b\u3068\u50d5\u3001\u7a7a\u3002"), "\u541b\u3068\u50d5\u7a7a")
+
+    def test_strip_release_info_keeps_the_readable_name(self):
+        self.assertEqual(gp.strip_release_info("Lovesick Blues (Walmart Performance)"), "Lovesick Blues")
+        self.assertEqual(gp.strip_release_info("Band feat. Guest"), "Band")
+
+
 class SongKeyTests(unittest.TestCase):
     def test_collapses_release_variants(self):
         a = gp.song_key("Song (Remastered 2011)", "Band")

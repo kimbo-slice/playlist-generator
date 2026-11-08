@@ -1,5 +1,41 @@
 # Changelog
 
+## LRCLIB lyrics backup; respect a Genius refusal
+- Genius began refusing this app's website requests (HTTP 403) after Nov 4,
+  2026. The app no longer keeps asking: on the first 403 it stops using Genius
+  for the rest of the run, with one console message instead of an error per song.
+- New `lrclib.py`: lyrics from LRCLIB (lrclib.net), a free, open lyrics
+  database with a public API (no key; the app identifies itself). Used when
+  Genius has no lyrics or refuses. Lookups are verified with the same
+  title/artist matching as everything else, retried without release details
+  ("(Walmart Performance)", "feat. X"), and prefer a sung version over an
+  instrumental entry with the same name.
+- Polite client, per LRCLIB's docs: requests spaced 0.7 s apart (under the
+  ~90/min allowed for identified clients) and `Retry-After` honored on a 429
+  (they may ban clients that ignore it).
+- Cache rules: lyrics from either source are cached. "No lyrics" is cached only
+  when every source gave a definite answer, so songs missed while Genius is
+  refusing get retried later, when Genius may answer again.
+- Measured on 300 cached songs with Genius lyrics (295 real songs, 5 Genius
+  translation pages). Of the 256 that are on Spotify: LRCLIB has the same
+  lyrics for 189 (74%), different text for 12 (5%; about half are the same song
+  transcribed differently), and nothing for 54 (21%). About 1.4 requests per
+  song, 1 s per song.
+
+## Curly apostrophes no longer lose songs
+- `normalize_text` stripped only ASCII punctuation, so Genius's curly
+  apostrophes and quotes (’ “ ”) survived: "You’re Not Alone" didn't match
+  Spotify's "You're Not Alone". This hit Genius → Spotify placement,
+  de-duplication, and searches with an apostrophe ("ain't"). It now strips all
+  Unicode punctuation, and " – " (en dash) release suffixes are dropped like " - ".
+- Measured on 40 cached songs with a curly apostrophe: placed on Spotify by the
+  app's resolver 5 times before, 29 after.
+- Cache keys change for 254 cached songs; `migrate_song_keys.py` re-keys them
+  (report by default, `--apply` backs up and changes in one transaction). It
+  also merges 15 songs cached twice under both spellings. Run it before using
+  this version, or those songs' lyrics are fetched again.
+- +23 offline tests (212 total, passing with the network blocked).
+
 ## Reorder by tempo and key
 - "Reorder by tempo + key" button in the Track list tab (`POST /api/reorder`) and
   `reorder.py` on the command line: reads a playlist or list, gets each track's
