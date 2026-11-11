@@ -232,7 +232,8 @@ class BackupTests(unittest.TestCase):
         store = InMemoryLyricStore()
         b = self.builder(FakeGenius({}, blocked=True), mock.Mock(return_value=None), store)
         self.assertEqual(b.cached_lyrics("Nowhere", "Band"), "")
-        self.assertIsNone(store.get("nowhere\x1fband"))
+        self.assertIsNone(store.get("nowhere\x1fband")["has_lyrics"])      # no answer recorded
+        self.assertIsNotNone(store.get("nowhere\x1fband")["lrclib_miss_at"])
 
     def test_backup_error_is_reported_and_not_cached(self):
         store = InMemoryLyricStore()
@@ -247,6 +248,98 @@ class BackupTests(unittest.TestCase):
         b = self.builder(FakeGenius({}), None, store)
         b.cached_lyrics("Nowhere", "Band")
         self.assertEqual(store.get("nowhere\x1fband")["has_lyrics"], False)
+
+
+class RememberedMissTests(unittest.TestCase):
+    """LRCLIB "not found" is remembered for LRCLIB_RECHECK_DAYS, without marking the song empty."""
+
+    def setUp(self):
+        patcher = mock.patch.object(gp.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.store = InMemoryLyricStore()
+
+    def builder(self, genius, backup):
+        return gp.PlaylistBuilder(sp=None, genius=genius, searches=["x"], threshold=3.0,
+                                  lyric_store=self.store, lyrics_fallback=backup, on_event=lambda e: None)
+
+    def miss_days_ago(self, days):
+        from datetime import datetime, timedelta, timezone
+        self.store.note_lrclib_miss("nowhere\x1fband", "Nowhere", "Band",
+                                    when=datetime.now(timezone.utc) - timedelta(days=days))
+
+    def test_repeat_run_skips_lrclib_for_a_recent_miss(self):
+        self.builder(FakeGenius({}, blocked=True), mock.Mock(return_value=None)).cached_lyrics("Nowhere", "Band")
+        backup = mock.Mock(return_value=None)
+        again = self.builder(FakeGenius({}, blocked=True), backup)
+        self.assertEqual(again.cached_lyrics("Nowhere", "Band"), "")
+        backup.assert_not_called()
+        self.assertIsNone(self.store.get("nowhere\x1fband")["has_lyrics"])   # still not marked empty
+
+    def test_lrclib_is_asked_again_after_the_recheck_period(self):
+        self.miss_days_ago(gp.LRCLIB_RECHECK_DAYS + 1)
+        backup = mock.Mock(return_value="arrived since")
+        b = self.builder(FakeGenius({}, blocked=True), backup)
+        self.assertEqual(b.cached_lyrics("Nowhere", "Band"), "arrived since")
+        self.assertEqual(self.store.get("nowhere\x1fband")["lyrics"], "arrived since")
+
+    def test_genius_is_still_asked_about_a_remembered_miss(self):
+        self.miss_days_ago(1)
+        b = self.builder(FakeGenius({"Nowhere": "from genius"}), mock.Mock())
+        self.assertEqual(b.cached_lyrics("Nowhere", "Band"), "from genius")
+        self.assertTrue(self.store.get("nowhere\x1fband")["has_lyrics"])
+
+    def test_genius_no_plus_remembered_lrclib_miss_is_a_definite_no(self):
+        self.miss_days_ago(1)
+        backup = mock.Mock()
+        b = self.builder(FakeGenius({}), backup)
+        self.assertEqual(b.cached_lyrics("Nowhere", "Band"), "")
+        backup.assert_not_called()
+        self.assertIs(self.store.get("nowhere\x1fband")["has_lyrics"], False)
+
+    def test_saved_lyrics_search_ignores_pending_rows(self):
+        self.miss_days_ago(1)
+        self.assertEqual(self.store.songs_mentioning(["nowhere"]), [])
+
+
+class EmptyVerdictTests(unittest.TestCase):
+    """The console says why a song has no lyric text, not just "no lyrics"."""
+
+    def setUp(self):
+        patcher = mock.patch.object(gp.time, "sleep")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def verdict(self, genius, backup, store=None):
+        events = []
+        b = gp.PlaylistBuilder(sp=None, genius=genius, searches=["x"], threshold=3.0,
+                               lyric_store=store, lyrics_fallback=backup, on_event=events.append)
+        b.evaluate_match("Song", "Band", b.cached_lyrics("Song", "Band"))
+        return [e for e in events if e["kind"] == "evaluate"][-1]["verdict"]
+
+    def test_instrumental(self):
+        self.assertEqual(self.verdict(FakeGenius({}, blocked=True), mock.Mock(return_value="")), "instrumental")
+
+    def test_not_found_anywhere(self):
+        self.assertEqual(self.verdict(FakeGenius({}, blocked=True), mock.Mock(return_value=None)), "not found")
+        self.assertEqual(self.verdict(FakeGenius({}), mock.Mock(return_value=None)), "not found")
+
+    def test_genius_page_with_no_lyrics(self):
+        self.assertEqual(self.verdict(FakeGenius({"Song": ""}), mock.Mock(return_value=None)), "no lyrics")
+
+    def test_errors_are_couldnt_check(self):
+        self.assertEqual(self.verdict(FakeGenius({}, blocked=True), mock.Mock(side_effect=RuntimeError)),
+                         "couldn't check")
+        self.assertEqual(self.verdict(FakeGenius({}, blocked=True), None), "couldn't check")
+
+    def test_cached_empty_is_no_lyrics(self):
+        store = InMemoryLyricStore()
+        store.put({"song_key": "song\x1fband", "title": "Song", "artist": "Band",
+                   "lyrics": "", "has_lyrics": False})
+        self.assertEqual(self.verdict(FakeGenius({}), mock.Mock(), store), "no lyrics")
+
+    def test_found_lyrics_are_scored_as_usual(self):
+        self.assertEqual(self.verdict(FakeGenius({}), mock.Mock(return_value="x x x")), "MATCH")
 
 
 if __name__ == "__main__":

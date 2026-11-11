@@ -47,6 +47,7 @@ import vibe_order
 YOURS = "you"           # Entry.source for a tempo the user typed in
 CLIP = "preview clip"   # Entry.source for a tempo measured from the preview clip
 AGREE_PCT = 3.0         # folded tempos this close count as the same
+PROGRESS_EVERY = 10     # report "done/total" this often during lookups and clips
 GETSONGBPM_PAUSE = 0.3  # seconds between lookups; their limit is 3000/hour
 CLIP_PAUSE = 0.2        # seconds between preview-clip measurements
 
@@ -142,7 +143,15 @@ def _never() -> bool:
     return False
 
 
-def lookup(tracks: list[dict], api_key: Optional[str], log=print,
+def _counter(label: str, total: int, progress):
+    """Calls ``progress("  <label> n/total")`` every PROGRESS_EVERY items and at the end."""
+    def tick(done: int) -> None:
+        if done == total or done % PROGRESS_EVERY == 0:
+            progress("  {} {}/{}".format(label, done, total))
+    return tick
+
+
+def lookup(tracks: list[dict], api_key: Optional[str], log=print, progress=print,
            should_stop=_never, cache: Optional[dict] = None) -> tuple[dict, dict]:
     """Ask both services about every track; returns ``(recco, gsb)`` for :func:`plan`.
 
@@ -158,11 +167,11 @@ def lookup(tracks: list[dict], api_key: Optional[str], log=print,
         seen_ids.update({track_id: found.get(track_id) for track_id in new_ids})
 
     if api_key:
-        for track in tracks:
+        to_ask = [t for t in tracks if t["line"] not in seen_lines]
+        tick = _counter("GetSongBPM", len(to_ask), progress)
+        for done, track in enumerate(to_ask, 1):
             if should_stop():
                 break
-            if track["line"] in seen_lines:
-                continue
             parsed = tracklist.parse_tracklist(track["line"])
             title, artist = parsed[0] if parsed else (track["line"], "")
             try:
@@ -170,6 +179,7 @@ def lookup(tracks: list[dict], api_key: Optional[str], log=print,
                     title, artist, api_key=api_key)
             except Exception as exc:  # noqa: BLE001 -- report and keep going
                 log("  ! GetSongBPM error for {}: {}".format(track["line"], type(exc).__name__))
+            tick(done)
             time.sleep(GETSONGBPM_PAUSE)
 
     recco = {t["id"]: seen_ids[t["id"]] for t in tracks if seen_ids.get(t.get("id"))}
@@ -194,7 +204,8 @@ def measure_missing(tracks: list[dict], recco: dict, gsb: dict, log=print, progr
     if to_measure:
         progress("\nMeasuring {} track(s) from preview clips (a few seconds each)...".format(
             len(to_measure)))
-    for track in to_measure:
+    tick = _counter("clips", len(to_measure), progress)
+    for done, track in enumerate(to_measure, 1):
         if should_stop():
             break
         parsed = tracklist.parse_tracklist(track["line"])
@@ -203,8 +214,32 @@ def measure_missing(tracks: list[dict], recco: dict, gsb: dict, log=print, progr
             seen[track["line"]] = audio_analysis.measure(title, artist)
         except Exception as exc:  # noqa: BLE001 -- report, leave uncached, keep going
             log("  ! Preview clip error for {}: {}".format(track["line"], type(exc).__name__))
+        tick(done)
         time.sleep(CLIP_PAUSE)
     return {t["line"]: seen[t["line"]] for t in missing if (seen.get(t["line"]) or {}).get("bpm")}
+
+
+def camelot(key: Optional[int], mode: Optional[int]) -> str:
+    """Pitch class + mode -> Camelot notation ("8B" = C major, "8A" = A minor); "?" if unknown."""
+    if key is None or mode not in (0, 1):
+        return "?"
+    fifths = (key * 7) % 12
+    return "{}B".format((fifths + 7) % 12 + 1) if mode == 1 else "{}A".format((fifths + 4) % 12 + 1)
+
+
+def table(tracks: list[dict], recco: dict, gsb: dict, clips: dict, log=print) -> None:
+    """Every track in its current order with BPM (as measured, not folded), Camelot key and source."""
+    log("{:>3}  {:<60} {:>5}  {:<4}  {}".format("#", "track", "BPM", "key", "source"))
+    for number, track in enumerate(tracks, 1):
+        r, g, c = recco.get(track.get("id")), gsb.get(track["line"]), clips.get(track["line"])
+        r_bpm, g_bpm, c_bpm = ((x or {}).get("bpm") for x in (r, g, c))
+        bpm = r_bpm or g_bpm or c_bpm
+        source = ("both" if r_bpm and g_bpm else "reccobeats" if r_bpm else "getsongbpm" if g_bpm
+                  else "preview clip" if c_bpm else "none")
+        features = tempo_sources.best_features(r, g) or {}
+        log("{:>3}  {:<60.60} {:>5}  {:<4}  {}".format(
+            number, track["line"], "{:.0f}".format(bpm) if bpm else "?",
+            camelot(features.get("key"), features.get("mode")), source))
 
 
 def load_tracks(sp, source: str, log=print) -> tuple[str, list[dict]]:
@@ -272,13 +307,28 @@ def main(argv: Optional[list[str]] = None) -> None:
                         help="Order by tempo alone, ignoring key")
     parser.add_argument("--no-clips", action="store_true",
                         help="Don't measure missing tempos from preview clips")
+    parser.add_argument("--table", action="store_true",
+                        help="Just list each track's BPM and Camelot key, in the current order")
     args = parser.parse_args(argv)
 
     name, tracks = load_tracks(tracklist.build_spotify_client(), args.source)
     api_key = os.environ.get("GETSONGBPM_API_KEY")
-    print('Getting tempos for {} track(s) from "{}"...\n'.format(len(tracks), name))
-    recco, gsb = lookup(tracks, api_key)
-    clips = {} if args.no_clips else measure_missing(tracks, recco, gsb)
+    import tempo_store
+    store = tempo_store.build_tempo_store()   # saved lookups, if DATABASE_URL is set
+    cache: dict = {}
+    loaded = tempo_store.preload(store, tracks, cache)
+    saved = sum(1 for t in tracks if t.get("id") in loaded["recco"]
+                or t["line"] in loaded["gsb"] or t["line"] in loaded["clips"])
+    print('Getting tempos for {} track(s) from "{}" ({} already saved)...\n'.format(
+        len(tracks), name, saved))
+    try:
+        recco, gsb = lookup(tracks, api_key, cache=cache)
+        clips = {} if args.no_clips else measure_missing(tracks, recco, gsb, cache=cache)
+    finally:
+        tempo_store.save_new(store, cache, loaded)   # keep what was found, even if stopped
+    if args.table:
+        table(tracks, recco, gsb, clips)
+        return
     ordered, unplaced = plan(tracks, recco, gsb, use_key=not args.no_key, clips=clips)
     report(ordered, unplaced, cross_checked=bool(api_key))
 

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi.testclient import TestClient
 import app as webapp
 from tests.test_app_tracklist import FakeSpotify, drain, track
+from tempo_store import InMemoryTempoStore
 
 FAST, SLOW, MID, LOST = "F" * 22, "S" * 22, "M" * 22, "L" * 22
 CATALOG = [track(FAST, "Fast", "Band"), track(SLOW, "Slow", "Band"),
@@ -36,6 +37,7 @@ class ReorderEndpointTests(unittest.TestCase):
         self.gsb = mock.Mock(side_effect=lambda title, artist, api_key=None:
                              {"Slow": feat(80), "Mid": feat(112)}.get(title))
         self.clip = mock.Mock(return_value=None)   # no preview clips unless a test says so
+        self.saved = InMemoryTempoStore()
         for patcher in (
             mock.patch.object(webapp, "_spotify_client", return_value=self.sp),
             mock.patch.object(webapp.reorder.tempo_sources, "reccobeats_features", self.recco),
@@ -43,6 +45,7 @@ class ReorderEndpointTests(unittest.TestCase):
             mock.patch.object(webapp.reorder.audio_analysis, "measure", self.clip),
             mock.patch.object(webapp.reorder.time, "sleep"),
             mock.patch.dict(os.environ, {"GETSONGBPM_API_KEY": "k"}),
+            mock.patch.object(webapp, "_tempo_store", lambda: self.saved),   # never the real DB
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -74,6 +77,13 @@ class ReorderEndpointTests(unittest.TestCase):
                          ["Slow - Band", "Lost - Band", "Fast - Band", "Mid - Band"])
         self.assertEqual(result["needs"], [])
         self.assertTrue(any("your tempo" in e["message"] for e in events if e["kind"] == "tempo"))
+
+    def test_saved_lookups_survive_a_restart(self):
+        self.reorder()
+        calls = (self.recco.call_count, self.gsb.call_count)
+        webapp._tempo_cache.clear()          # the app restarted; only the saved lookups remain
+        self.reorder()
+        self.assertEqual((self.recco.call_count, self.gsb.call_count), calls)
 
     def test_reordering_again_asks_the_services_nothing(self):
         self.reorder()

@@ -1,5 +1,32 @@
 # Changelog
 
+## Remember LRCLIB misses for a month
+- While Genius is refusing, a song LRCLIB doesn't have can't be cached as "no
+  lyrics" (Genius may know it later), so every run asked LRCLIB about it
+  again -- ~1 s per song, and load on a donation-run server.
+- Now the miss is noted (`lrclib_miss_at`, a new column added automatically)
+  without marking the song empty, and LRCLIB isn't asked about it again for
+  30 days (`LRCLIB_RECHECK_DAYS`). Genius is still asked once it's back; after
+  30 days LRCLIB gets another try, in case it has added the song.
+- Live check: second lookup of a missing song 0.10 s instead of 1.46 s, no
+  LRCLIB request. Saved-lyrics search ignores these "pending" rows.
+- The console now says why a song has no lyric text: "not found" (no source
+  has it), "instrumental", "no lyrics" (the song exists but has none), or
+  "couldn't check" (an error or refusal), instead of "no lyrics" for all four.
+  On 124 empty songs from a "cordial" run: 123 not found, 1 instrumental.
+- Reorder reports progress during the slow steps ("GetSongBPM 30/75",
+  "clips 20/45"), in the terminal and the web console, so a long lookup no
+  longer looks stuck.
+- Tempo and key lookups are saved (`tempo_store.py`, a `tempo_lookups` table in
+  the same database) and reused by the web app and `reorder.py`. "Not known"
+  answers are rechecked after 30 days. Live: reordering a 75-track playlist
+  took 2 min 39 s the first time, 2.9 s the second.
+- `reorder.py <playlist> --table`: each track's BPM (as measured) and Camelot
+  key in the playlist's current order, with where each came from. Changes
+  nothing.
+- +22 offline tests (241 total, passing with the network blocked; the app's
+  tests use an in-memory store, never the real database).
+
 ## Search your saved lyrics
 - New first discovery step, "Saved lyrics" (checkbox in the UI, on by
   default; `--saved False` on the CLI): every song in the lyric cache is

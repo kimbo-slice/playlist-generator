@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import lrclib
+import tempo_store
 import reorder
 import tracklist
 
@@ -158,6 +159,11 @@ def tracklist_executor(run: Run) -> None:
 _tempo_cache: dict = {}
 
 
+def _tempo_store():
+    """Saved tempo lookups (Postgres when DATABASE_URL is set); a seam tests replace."""
+    return tempo_store.build_tempo_store()
+
+
 def reorder_executor(run: Run) -> None:
     """Look a track list up, get tempos, and emit the list in its new order.
 
@@ -178,16 +184,24 @@ def reorder_executor(run: Run) -> None:
     tracks = [{"line": label, "id": track_id} for track_id, label in resolved]
 
     api_key = os.environ.get("GETSONGBPM_API_KEY")
+    store = _tempo_store()
+    loaded = tempo_store.preload(store, tracks, _tempo_cache)
     emit("search", "\nGetting tempos (the first time takes about a second per track)...")
-    recco, gsb = reorder.lookup(tracks, api_key, log=lambda message: emit("error", message),
-                                should_stop=run.should_stop, cache=_tempo_cache)
-    if run.should_stop():
-        return
-
-    clips = reorder.measure_missing(
-        tracks, recco, gsb, log=lambda message: emit("error", message),
-        progress=lambda message: emit("search", message),
-        should_stop=run.should_stop, cache=_tempo_cache)
+    try:
+        recco, gsb = reorder.lookup(tracks, api_key, log=lambda message: emit("error", message),
+                                    progress=lambda message: emit("search", message),
+                                    should_stop=run.should_stop, cache=_tempo_cache)
+        if run.should_stop():
+            return
+        clips = reorder.measure_missing(
+            tracks, recco, gsb, log=lambda message: emit("error", message),
+            progress=lambda message: emit("search", message),
+            should_stop=run.should_stop, cache=_tempo_cache)
+    finally:
+        try:
+            tempo_store.save_new(store, _tempo_cache, loaded)   # keep what was found, even if stopped
+        except Exception as exc:  # noqa: BLE001 -- saving is a bonus; don't fail the reorder
+            emit("error", "Couldn't save tempo lookups ({})".format(type(exc).__name__))
     if run.should_stop():
         return
 

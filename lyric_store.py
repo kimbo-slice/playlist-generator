@@ -16,6 +16,10 @@ else ``None`` (no caching -> unchanged behavior).
 A record is a plain dict: {song_key, title, artist, spotify_id, lyrics,
 has_lyrics}. bpm/musical_key/mode columns are reserved for vibe ordering.
 
+``has_lyrics`` is ``None`` for a "pending" row: no definite answer yet, only a
+note (``lrclib_miss_at``) that LRCLIB didn't have the song at that time, so
+repeat runs can skip asking it again for a while (``note_lrclib_miss``).
+
 ``songs_mentioning(terms)`` returns cached songs whose lyrics might contain any
 of the terms -- a cheap, generous pre-filter (one word fragment per term, case
 -insensitive); callers score the results exactly with ``match_percentage``.
@@ -25,6 +29,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from typing import Iterable, List, Optional
 
 
@@ -49,11 +54,17 @@ class InMemoryLyricStore:
         return dict(row) if row is not None else None
 
     def put(self, record: dict) -> None:
-        self._rows[record["song_key"]] = dict(record)
+        previous = self._rows.get(record["song_key"], {})
+        self._rows[record["song_key"]] = {"lrclib_miss_at": previous.get("lrclib_miss_at"), **record}
 
     def remember_track(self, song_key: str, spotify_id: str) -> None:
         if song_key in self._rows:
             self._rows[song_key]["spotify_id"] = spotify_id
+
+    def note_lrclib_miss(self, song_key: str, title: str, artist: str, when: Optional[datetime] = None) -> None:
+        row = self._rows.setdefault(song_key, {"song_key": song_key, "title": title, "artist": artist,
+                                               "spotify_id": None, "lyrics": None, "has_lyrics": None})
+        row["lrclib_miss_at"] = when or datetime.now(timezone.utc)
 
     def songs_mentioning(self, terms: Iterable[str]) -> List[dict]:
         fragments = [f for f in (search_fragment(t) for t in terms) if f]
@@ -80,8 +91,17 @@ class PostgresLyricStore:
             musical_key INTEGER,
             mode        INTEGER,
             fetched_at  TIMESTAMPTZ DEFAULT now()
-        )
+        );
+        ALTER TABLE songs ADD COLUMN IF NOT EXISTS lrclib_miss_at TIMESTAMPTZ
     """
+
+    _NOTE_MISS = """
+        INSERT INTO songs (song_key, title, artist, lrclib_miss_at)
+        VALUES (%s, %s, %s, now())
+        ON CONFLICT (song_key) DO UPDATE SET lrclib_miss_at = now()
+    """
+
+    _COLUMNS = ("song_key", "title", "artist", "spotify_id", "lyrics", "has_lyrics", "lrclib_miss_at")
 
     _UPSERT = """
         INSERT INTO songs (song_key, title, artist, spotify_id, lyrics, has_lyrics)
@@ -105,15 +125,18 @@ class PostgresLyricStore:
     def get(self, song_key: str) -> Optional[dict]:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT song_key, title, artist, spotify_id, lyrics, has_lyrics "
-                "FROM songs WHERE song_key = %s",
+                "SELECT {} FROM songs WHERE song_key = %s".format(", ".join(self._COLUMNS)),
                 (song_key,),
             )
             row = cur.fetchone()
         if row is None:
             return None
-        keys = ("song_key", "title", "artist", "spotify_id", "lyrics", "has_lyrics")
-        return dict(zip(keys, row))
+        return dict(zip(self._COLUMNS, row))
+
+    def note_lrclib_miss(self, song_key: str, title: str, artist: str) -> None:
+        """Remember that LRCLIB didn't have this song (leaves any answer untouched)."""
+        with self._conn.cursor() as cur:
+            cur.execute(self._NOTE_MISS, (song_key, title, artist))
 
     def remember_track(self, song_key: str, spotify_id: str) -> None:
         """Save the Spotify track a cached song was placed as (lyrics untouched)."""

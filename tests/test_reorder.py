@@ -172,5 +172,50 @@ class MeasureMissingTests(unittest.TestCase):
         measure.assert_not_called()
 
 
+class ProgressTests(unittest.TestCase):
+    """Long lookups report done/total, so a quiet console doesn't look stuck."""
+
+    def tracks(self, n):
+        return [{"line": "Song %d - Band" % i, "id": None} for i in range(n)]
+
+    def test_getsongbpm_counts_every_ten_and_at_the_end(self):
+        messages = []
+        with mock.patch.object(reorder.tempo_sources, "getsongbpm_lookup", return_value=None), \
+             mock.patch.object(reorder.time, "sleep"):
+            reorder.lookup(self.tracks(23), "key", log=lambda m: None, progress=messages.append)
+        self.assertEqual(messages, ["  GetSongBPM 10/23", "  GetSongBPM 20/23", "  GetSongBPM 23/23"])
+
+    def test_already_known_tracks_are_not_counted(self):
+        messages, cache = [], {}
+        with mock.patch.object(reorder.tempo_sources, "getsongbpm_lookup", return_value=None), \
+             mock.patch.object(reorder.time, "sleep"):
+            reorder.lookup(self.tracks(3), "key", log=lambda m: None, progress=lambda m: None, cache=cache)
+            reorder.lookup(self.tracks(5), "key", log=lambda m: None, progress=messages.append, cache=cache)
+        self.assertEqual(messages, ["  GetSongBPM 2/2"])
+
+    def test_clips_count_too(self):
+        messages = []
+        with mock.patch.object(reorder.audio_analysis, "measure", return_value=None), \
+             mock.patch.object(reorder.time, "sleep"):
+            reorder.measure_missing(self.tracks(12), {}, {}, log=lambda m: None, progress=messages.append)
+        self.assertEqual(messages[1:], ["  clips 10/12", "  clips 12/12"])
+
+
+class TableTests(unittest.TestCase):
+    def test_camelot(self):
+        self.assertEqual([reorder.camelot(k, m) for k, m in
+                          [(0, 1), (9, 0), (7, 1), (6, 0), (5, 1), (0, 0), (None, 1), (3, None)]],
+                         ["8B", "8A", "9B", "11A", "7B", "5A", "?", "?"])
+
+    def test_rows_keep_order_and_show_unfolded_bpm_and_source(self):
+        tracks = [{"line": "Slow - Band", "id": ID_A}, {"line": "Clip - Band", "id": ID_B},
+                  {"line": "Gone - Band", "id": ID_C}]
+        rows = []
+        reorder.table(tracks, {ID_A: {"bpm": 160.0, "key": 9, "mode": 0}}, {},
+                      {"Clip - Band": {"bpm": 65.0}}, log=rows.append)
+        self.assertEqual([r[63:].split(None, 2) for r in rows[1:]],
+                         [["160", "8A", "reccobeats"], ["65", "?", "preview clip"], ["?", "?", "none"]])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

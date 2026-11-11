@@ -188,6 +188,13 @@ def lyric_fingerprint(lyrics: Optional[str]) -> Optional[str]:
     return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 
 
+# Console verdicts for a song with no lyric text, by why it's empty.
+_EMPTY_VERDICTS = {"none": "no lyrics", "instrumental": "instrumental",
+                   "not_found": "not found", "unchecked": "couldn't check"}
+
+LRCLIB_RECHECK_DAYS = 30   # after LRCLIB has nothing for a song, wait this long before asking again
+
+
 def is_confident_match(
     candidate_title: Optional[str],
     candidate_artist: Optional[str],
@@ -263,6 +270,11 @@ class PlaylistBuilder:
     # True when the last fetch failed transiently (error/429) rather than
     # authoritatively returning no lyrics -- so we don't cache it as "no lyrics".
     _last_fetch_error: bool = False
+    # Why the last cached_lyrics() call came back empty, for the console:
+    # "found", "none" (the song has no lyrics), "instrumental", "not_found"
+    # (no source has the song), or "unchecked" (an error or refusal).
+    lyrics_status: Optional[str] = None
+    _genius_status: str = "unchecked"
     # Backup lyrics source used when Genius has no lyrics or refuses us:
     # ``(title, artist) -> text | "" (instrumental) | None (unknown)``, e.g.
     # ``lrclib.lookup_lyrics``. None -> Genius only.
@@ -413,6 +425,16 @@ class PlaylistBuilder:
         return song_key(title, artist) in self.seen_keys
 
     # -- lyric lookups (cache-aware) -------------------------------------- #
+    def _lrclib_missed_recently(self, record: Optional[dict]) -> bool:
+        """True if LRCLIB had nothing for this song within LRCLIB_RECHECK_DAYS."""
+        missed = (record or {}).get("lrclib_miss_at")
+        if missed is None:
+            return False
+        from datetime import datetime, timedelta, timezone
+        if missed.tzinfo is None:
+            missed = missed.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - missed < timedelta(days=LRCLIB_RECHECK_DAYS)
+
     def cached_lyrics(self, title: str, artist: str, url: Optional[str] = None) -> str:
         """Return a song's lyrics, using the persistent cache when available.
 
@@ -422,40 +444,58 @@ class PlaylistBuilder:
         result. "No lyrics" is cached only when every source gave a definite
         answer; a transient failure, or a Genius refusal, is NOT cached, so the
         song is retried later (and Genius gets another chance if it relents).
+        When LRCLIB has nothing for such a song, that is noted, and LRCLIB isn't
+        asked about it again for LRCLIB_RECHECK_DAYS.
         """
         key = "\x1f".join(song_key(title, artist))
         store = self.lyric_store
-        if store is not None:
-            record = store.get(key)
-            if record is not None:
-                self.emit("cache", "cache hit: {} - {}".format(title, artist),
-                          title=title, artist=artist)
-                return record.get("lyrics") or ""
+        record = store.get(key) if store is not None else None
+        if record is not None and record.get("has_lyrics") is not None:
+            self.emit("cache", "cache hit: {} - {}".format(title, artist),
+                      title=title, artist=artist)
+            self.lyrics_status = "found" if record.get("has_lyrics") else "none"
+            return record.get("lyrics") or ""
+        skip_lrclib = self._lrclib_missed_recently(record)
 
-        lyrics, definite = "", True
+        lyrics, definite, status = "", True, "unchecked"
         if self.genius_blocked:
             definite = False
         else:
             lyrics = self.fetch_lyrics_by_url(url) if url else self.get_lyrics_from_genius(title, artist)
             definite = not self._last_fetch_error
-        if not lyrics and self.lyrics_fallback is not None:
+            status = self._genius_status
+        if not lyrics and self.lyrics_fallback is not None and skip_lrclib:
+            if status != "none":
+                status = "not_found"
+            self.emit("cache", "LRCLIB had nothing recently, not asking again: {} - {}".format(
+                title, artist), title=title, artist=artist)
+        elif not lyrics and self.lyrics_fallback is not None:
             try:
                 backup = self.lyrics_fallback(title, artist)
             except Exception as exc:  # noqa: BLE001 -- report, don't cache, keep going
                 self.emit("error", "Error fetching lyrics from LRCLIB for {} - {} ({})".format(
                     title, artist, type(exc).__name__), error=type(exc).__name__)
                 definite = False
+                if status != "none":
+                    status = "unchecked"
             else:
                 if backup:
-                    lyrics, definite = backup, True
+                    lyrics, definite, status = backup, True, "found"
+                elif backup == "":
+                    status = "instrumental"
+                elif status != "none":
+                    status = "not_found"
                 elif backup is None and self.genius_blocked:
                     definite = False   # unknown to LRCLIB; Genius might know it later
+                if backup is None and not definite and store is not None and hasattr(store, "note_lrclib_miss"):
+                    store.note_lrclib_miss(key, title, artist)   # skip LRCLIB for a while
 
         if store is not None and definite:
             store.put({
                 "song_key": key, "title": title, "artist": artist,
                 "lyrics": lyrics, "has_lyrics": bool(lyrics),
             })
+        self.lyrics_status = "found" if lyrics else status
         return lyrics
 
     def get_lyrics_from_genius(self, title: str, artist: str) -> str:
@@ -464,12 +504,16 @@ class PlaylistBuilder:
         except Exception as exc:
             self._handle_genius_error(exc, "fetching lyrics for {} - {}".format(title, artist))
             self._last_fetch_error = True
+            self._genius_status = "unchecked"
             return ""
         self._last_fetch_error = False
         self.genius_backoff = 0.0  # success -> stop backing off
         if song is None:
+            self._genius_status = "not_found"
             return ""
-        return clean_genius_lyrics(song.lyrics)
+        text = clean_genius_lyrics(song.lyrics)
+        self._genius_status = "found" if text else "none"
+        return text
 
     def fetch_lyrics_by_url(self, url: str) -> str:
         try:
@@ -477,10 +521,13 @@ class PlaylistBuilder:
         except Exception as exc:
             self._handle_genius_error(exc, "fetching lyrics from {}".format(url))
             self._last_fetch_error = True
+            self._genius_status = "unchecked"
             return ""
         self._last_fetch_error = False
         self.genius_backoff = 0.0
-        return clean_genius_lyrics(text)
+        text = clean_genius_lyrics(text)
+        self._genius_status = "found" if text else "none"   # the page exists, so the song does
+        return text
 
     def resolve_spotify_track(
         self, title: str, artist: str
@@ -534,7 +581,7 @@ class PlaylistBuilder:
         pct = match_percentage(lyrics, self.searches)
         matched = is_match(lyrics, self.searches, self.threshold)
         if not normalize_text(lyrics):
-            verdict = "no lyrics"
+            verdict = _EMPTY_VERDICTS.get(self.lyrics_status, "no lyrics")
         elif matched:
             verdict = "MATCH"
         else:
