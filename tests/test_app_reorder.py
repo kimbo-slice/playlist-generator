@@ -78,6 +78,14 @@ class ReorderEndpointTests(unittest.TestCase):
         self.assertEqual(result["needs"], [])
         self.assertTrue(any("your tempo" in e["message"] for e in events if e["kind"] == "tempo"))
 
+    def test_tracks_without_a_key_are_listed_and_typed_keys_come_back(self):
+        result, _ = self.reorder()
+        self.assertEqual(sorted(result["no_key"]), ["Fast - Band", "Lost - Band", "Mid - Band", "Slow - Band"])
+        result, events = self.reorder(keys={"fast - band": "A minor", "Slow - Band": "nonsense"})
+        self.assertEqual(result["typed_keys"], {"Fast - Band": "8A"})
+        self.assertNotIn("Fast - Band", result["no_key"])
+        self.assertTrue(any(e["kind"] == "error" and "nonsense" in e["message"] for e in events))
+
     def test_saved_lookups_survive_a_restart(self):
         self.reorder()
         calls = (self.recco.call_count, self.gsb.call_count)

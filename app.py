@@ -60,6 +60,7 @@ class ReorderParams(BaseModel):
     text: str                                # one track per line, "Title - Artist"
     known: Optional[Dict[str, str]] = None   # line -> track id, from a loaded playlist
     tempos: Optional[Dict[str, float]] = None   # line -> BPM the user typed in
+    keys: Optional[Dict[str, str]] = None       # line -> key the user typed in ("8A", "A minor"...)
 
 
 class PlaylistLink(BaseModel):
@@ -205,7 +206,12 @@ def reorder_executor(run: Run) -> None:
     if run.should_stop():
         return
 
-    ordered, unplaced = reorder.plan(tracks, recco, gsb, overrides=p.tempos, clips=clips)
+    for line, text in (p.keys or {}).items():
+        if text.strip() and reorder.parse_key(text) is None:
+            emit("error", "Couldn't read the key '{}' for {} -- try 8A, A minor or Am.".format(
+                text, line))
+    ordered, unplaced = reorder.plan(tracks, recco, gsb, overrides=p.tempos, clips=clips,
+                                     key_overrides=p.keys)
     reorder.report(ordered, unplaced, cross_checked=bool(api_key), paste=False,
                    log=lambda message: emit("tempo", message))
 
@@ -217,7 +223,10 @@ def reorder_executor(run: Run) -> None:
          text="\n".join(lines),
          known={track["line"]: track["id"] for track in tracks},
          needs=[{"line": e.line, "flag": e.flag, "readings": [round(r) for r in e.readings]}
-                for e in ordered + unplaced if e.flag])
+                for e in ordered + unplaced if e.flag],
+         no_key=[e.line for e in ordered + unplaced if e.key is None],
+         typed_keys={e.line: reorder.camelot(e.key, e.mode) for e in ordered + unplaced
+                     if e.key_yours})
 
 
 def _run_thread(run: Run, executor) -> None:

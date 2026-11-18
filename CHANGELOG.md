@@ -1,5 +1,18 @@
 # Changelog
 
+## Type in keys
+- The reorder panel lists tracks with no known key, each with a key box. Type
+  the key in any common form -- Camelot (`8A`), Open Key (`1m`), or a name
+  (`A minor`, `Am`, `C#m`, `Bb major`, `F♯ min`) -- and reorder again. Typed keys
+  beat the services', are remembered in your browser like typed tempos, and
+  "Forget my tempos and keys" clears both. A key that can't be read is named
+  in the console instead of being silently ignored.
+- Why not detect keys from the preview clips instead: tested on 29 tracks with
+  known keys, the best method (Essentia, several key profiles, plus the app's
+  own) got 5 exactly right and 13 within a mixable step. A 30-second clip is
+  often a section that isn't in the song's home key.
+- +6 offline tests (247 total, passing with the network blocked).
+
 ## Remember LRCLIB misses for a month
 - While Genius is refusing, a song LRCLIB doesn't have can't be cached as "no
   lyrics" (Genius may know it later), so every run asked LRCLIB about it

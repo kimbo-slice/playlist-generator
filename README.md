@@ -115,8 +115,10 @@ Turns a list of songs into a playlist, and can reorder it first.
   from the slowest track and steps through nearby tempos and keys. It changes only
   the box, nothing on Spotify. Tracks whose tempo can't be found go to a
   "place these by hand" list at the bottom. When two sources disagree on a tempo, you
-  can pick one or type your own (remembered in your browser), then **Reorder
-  again**. **Undo reorder** puts the box back.
+  can pick one or type your own. Tracks with no known key get a box too: type the
+  key however you have it (`8A`, `A minor`, `Am`, `C#m`). Then **Reorder again**.
+  Everything you type is remembered in your browser. **Undo reorder** puts the
+  box back.
 
 The first reorder of a playlist takes a few minutes (about a second per track, plus
 a few seconds for each track measured from its preview clip). With a database,

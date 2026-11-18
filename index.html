@@ -67,6 +67,9 @@
   #needs button.pick { background:#2a2a2a; color:var(--text); padding:4px 12px; font-size:12px; }
   #needs .actions { display:flex; gap:10px; align-items:center; margin-top:10px; }
   #needs .actions span { color:var(--muted); font-size:12px; }
+  #needs h3.keys { margin-top:14px; }
+  #needs input.key { width:110px; }
+  #keyRows { max-height:260px; overflow-y:auto; }
   aside { border-left:1px solid var(--line); background:var(--panel); padding:14px;
           display:flex; flex-direction:column; gap:10px; }
   aside .head { display:flex; align-items:center; justify-content:space-between; }
@@ -145,10 +148,12 @@
 <div id="needs" hidden>
   <h3 id="needsTitle"></h3>
   <div id="needsRows"></div>
+  <h3 id="keysTitle" class="keys" hidden></h3>
+  <div id="keyRows"></div>
   <div class="actions">
     <button id="applyTempos" class="primary go">Reorder again</button>
     <button id="undoReorder" class="secondary">Undo reorder</button>
-    <button id="forgetTempos" class="secondary" title="Clear every tempo you have typed in">Forget my tempos</button>
+    <button id="forgetTempos" class="secondary" title="Clear every tempo and key you have typed in">Forget my tempos and keys</button>
     <span id="temposNote"></span>
   </div>
 </div>
@@ -180,6 +185,15 @@ function saveTempos(tempos) {
   try { localStorage.setItem("tempos", JSON.stringify(tempos)); } catch (e) { /* still works this run */ }
 }
 let myTempos = loadTempos();
+
+// Keys you typed in ("8A", "A minor", "Am"...), kept in this browser the same way.
+function loadKeys() {
+  try { return JSON.parse(localStorage.getItem("keys") || "{}") || {}; } catch (e) { return {}; }
+}
+function saveKeys(keys) {
+  try { localStorage.setItem("keys", JSON.stringify(keys)); } catch (e) { /* still works this run */ }
+}
+let myKeys = loadKeys();
 
 const PLAYER_STATES = {
   idle: '<div class="player-state"><div class="icon">🎧</div>'
@@ -324,16 +338,34 @@ async function startReorder() {
   if (!text.trim()) { alert("Paste some tracks first."); return; }
   collectTempos();
   $("needs").hidden = true;
-  await begin("/api/reorder", {text: text, known: known, tempos: myTempos}, "noPlaylist");
+  await begin("/api/reorder", {text: text, known: known, tempos: myTempos, keys: myKeys}, "noPlaylist");
 }
 
-// Read any tempos typed into the panel and remember them.
+// Read any tempos and keys typed into the panel and remember them.
 function collectTempos() {
   document.querySelectorAll("#needsRows input").forEach((input) => {
     const bpm = parseFloat(input.value);
     if (bpm > 0) myTempos[tempoKey(input.dataset.line)] = bpm;
   });
   saveTempos(myTempos);
+  document.querySelectorAll("#keyRows input").forEach((input) => {
+    const id = tempoKey(input.dataset.line), text = input.value.trim();
+    if (text) myKeys[id] = text; else delete myKeys[id];
+  });
+  saveKeys(myKeys);
+}
+
+// One row per track: its name and a key box (pre-filled with what you typed before).
+function keyRow(line, note) {
+  const row = document.createElement("div"); row.className = "need";
+  const name = document.createElement("span"); name.className = "name"; name.textContent = line;
+  const input = document.createElement("input");
+  input.type = "text"; input.className = "key"; input.placeholder = "Key";
+  input.value = myKeys[tempoKey(line)] || ""; input.dataset.line = line;
+  row.append(name);
+  if (note) { const why = document.createElement("span"); why.className = "why"; why.textContent = note; row.append(why); }
+  row.append(input);
+  return row;
 }
 
 // A reorder finished: put the new order in the box and ask about tracks that need a tempo.
@@ -362,13 +394,28 @@ function showReorder(ev) {
     rows.append(row);
   });
 
-  const count = (ev.needs || []).length, saved = Object.keys(myTempos).length;
+  const keyRows = $("keyRows");
+  keyRows.innerHTML = "";
+  const noKey = ev.no_key || [], typed = ev.typed_keys || {};
+  Object.keys(typed).forEach((line) => keyRows.append(keyRow(line, "yours: " + typed[line])));
+  noKey.forEach((line) => keyRows.append(keyRow(line, "")));
+  $("keysTitle").textContent = noKey.length
+    ? noKey.length + " track(s) have no key. Add any you know (8A, A minor, Am...), then reorder again."
+    : "Every track has a key.";
+  $("keysTitle").hidden = !(noKey.length || Object.keys(typed).length);
+
+  const count = (ev.needs || []).length;
+  const savedTempos = Object.keys(myTempos).length, savedKeys = Object.keys(myKeys).length;
   $("needsTitle").textContent = count
     ? count + " track(s) need a tempo from you. Enter it, then reorder again."
     : "Every track has a tempo.";
-  $("applyTempos").hidden = !count;
-  $("forgetTempos").hidden = !saved;
-  $("temposNote").textContent = saved ? saved + " tempo(s) you entered are remembered in this browser." : "";
+  $("applyTempos").hidden = !(count || noKey.length || Object.keys(typed).length);
+  $("forgetTempos").hidden = !(savedTempos || savedKeys);
+  const remembered = [];
+  if (savedTempos) remembered.push(savedTempos + " tempo(s)");
+  if (savedKeys) remembered.push(savedKeys + " key(s)");
+  $("temposNote").textContent = remembered.length
+    ? remembered.join(" and ") + " you entered are remembered in this browser." : "";
   $("needs").hidden = false;
 }
 
@@ -379,6 +426,7 @@ function undoReorder() {
 
 function forgetTempos() {
   myTempos = {}; saveTempos(myTempos);
+  myKeys = {}; saveKeys(myKeys);
   $("forgetTempos").hidden = true;
   $("temposNote").textContent = "Cleared. Reorder again to see the effect.";
 }

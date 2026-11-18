@@ -217,5 +217,41 @@ class TableTests(unittest.TestCase):
                          [["160", "8A", "reccobeats"], ["65", "?", "preview clip"], ["?", "?", "none"]])
 
 
+class TypedKeyTests(unittest.TestCase):
+    """Keys typed in the panel: any common notation, and they beat the services."""
+
+    def test_notations(self):
+        cases = {"8A": (9, 0), "8b": (0, 1), "12A": (1, 0), "1d": (0, 1), "A minor": (9, 0),
+                 "Am": (9, 0), "a min": (9, 0), "C": (0, 1), "C#m": (1, 0), "Db": (1, 1),
+                 "Bb major": (10, 1), "F\u266f minor": (6, 0), "B flat minor": (10, 0)}
+        for text, expected in cases.items():
+            self.assertEqual(reorder.parse_key(text), expected, text)
+
+    def test_unreadable_keys_are_none(self):
+        for text in ("13A", "H minor", "", "  ", None, "banana"):
+            self.assertIsNone(reorder.parse_key(text), text)
+
+    def test_every_camelot_key_reads_back(self):
+        for key in range(12):
+            for mode in (0, 1):
+                self.assertEqual(reorder.parse_key(reorder.camelot(key, mode)), (key, mode))
+
+    def test_typed_key_fills_a_gap_and_beats_a_service(self):
+        tracks = [{"line": "Known - Band", "id": ID_A}, {"line": "Unknown - Band", "id": ID_B}]
+        recco = {ID_A: {"bpm": 120.0, "key": 0, "mode": 1}, ID_B: {"bpm": 122.0}}
+        ordered, _ = reorder.plan(tracks, recco, {}, key_overrides={
+            "unknown - band": "Am", "KNOWN - Band": "5A"})
+        by_line = {e.line: e for e in ordered}
+        self.assertEqual((by_line["Unknown - Band"].key, by_line["Unknown - Band"].mode), (9, 0))
+        self.assertEqual(reorder.camelot(by_line["Known - Band"].key, by_line["Known - Band"].mode), "5A")
+        self.assertTrue(all(e.key_yours for e in ordered))
+
+    def test_unreadable_typed_key_leaves_the_service_key(self):
+        tracks = [{"line": "Known - Band", "id": ID_A}]
+        recco = {ID_A: {"bpm": 120.0, "key": 0, "mode": 1}}
+        ordered, _ = reorder.plan(tracks, recco, {}, key_overrides={"Known - Band": "banana"})
+        self.assertEqual((ordered[0].key, ordered[0].key_yours), (0, False))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

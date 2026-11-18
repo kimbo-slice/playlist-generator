@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -67,6 +68,7 @@ class Entry:
     readings: tuple = ()          # the differing tempos, when the services disagree
     key: Optional[int] = None
     mode: Optional[int] = None
+    key_yours: bool = False       # the key was typed in by the user
 
 
 # --------------------------------------------------------------------------- #
@@ -100,9 +102,41 @@ def line_key(line: str) -> str:
     return " ".join(line.lower().split())
 
 
+_NOTE_RE = re.compile(r"^([a-g])\s*(#|\u266f|sharp|b|\u266d|flat)?\s*(m|min|minor|maj|major)?$")
+_CAMELOT_RE = re.compile(r"^(\d{1,2})\s*([ab])$")
+_NOTE_PITCH = {"c": 0, "d": 2, "e": 4, "f": 5, "g": 7, "a": 9, "b": 11}
+
+
+def parse_key(text: Optional[str]) -> Optional[tuple]:
+    """A typed key -> ``(pitch class, mode)``, or None if it can't be read.
+
+    Accepts Camelot ("8A", "12b"), Open Key ("1d", "1m") and names ("A minor",
+    "Am", "C# major", "Bb", "F\u266f min"); a bare note means major.
+    """
+    value = " ".join((text or "").strip().lower().split())
+    camelot_match = _CAMELOT_RE.match(value)
+    if camelot_match and 1 <= int(camelot_match.group(1)) <= 12:
+        number, letter = int(camelot_match.group(1)), camelot_match.group(2)
+        fifths = (number - (8 if letter == "b" else 5)) % 12
+        return (fifths * 7) % 12, 1 if letter == "b" else 0
+    key, mode = tempo_sources.parse_open_key(value.replace(" ", ""))
+    if key is not None:
+        return key, mode
+    note = _NOTE_RE.match(value)
+    if not note:
+        return None
+    pitch = _NOTE_PITCH[note.group(1)]
+    if note.group(2) in ("#", "\u266f", "sharp"):
+        pitch += 1
+    elif note.group(2) in ("b", "\u266d", "flat"):
+        pitch -= 1
+    return pitch % 12, 0 if note.group(3) in ("m", "min", "minor") else 1
+
+
 def plan(tracks: list[dict], recco: dict, gsb: dict, use_key: bool = True,
          overrides: Optional[dict] = None,
-         clips: Optional[dict] = None) -> tuple[list[Entry], list[Entry]]:
+         clips: Optional[dict] = None,
+         key_overrides: Optional[dict] = None) -> tuple[list[Entry], list[Entry]]:
     """Return ``(ordered, unplaced)`` entries.
 
     ``tracks`` are ``{"line", "id"}`` dicts in the current order; ``recco`` maps
@@ -111,8 +145,11 @@ def plan(tracks: list[dict], recco: dict, gsb: dict, use_key: bool = True,
     ``overrides`` maps a line to a tempo the user supplied; it beats both services.
     ``clips`` maps a line to a preview-clip measurement, used only when neither
     service has a tempo; its key is ignored.
+    ``key_overrides`` maps a line to a key the user typed ("8A", "A minor"...);
+    it beats both services. Ones that can't be read are ignored (see parse_key).
     """
     yours = {line_key(line): vibe_order.fold_bpm(bpm) for line, bpm in (overrides or {}).items()}
+    your_keys = {line_key(line): parse_key(text) for line, text in (key_overrides or {}).items()}
     entries = []
     for position, track in enumerate(tracks, start=1):
         from_recco, from_gsb = recco.get(track.get("id")), gsb.get(track["line"])
@@ -124,8 +161,11 @@ def plan(tracks: list[dict], recco: dict, gsb: dict, use_key: bool = True,
             bpm, source, flag, confirmed = yours[line_key(track["line"])], YOURS, "", False
         elif flag and all(both):
             readings = tuple(both)
+        key, mode, key_yours = best.get("key"), best.get("mode"), False
+        if your_keys.get(line_key(track["line"])):
+            (key, mode), key_yours = your_keys[line_key(track["line"])], True
         entries.append(Entry(track["line"], position, bpm, source, flag, confirmed, readings,
-                             best.get("key"), best.get("mode")))
+                             key, mode, key_yours))
 
     # Label each track by its index so duplicate lines stay distinct.
     ordered, _ = vibe_order.order_tracks([
@@ -293,6 +333,12 @@ def report(ordered: list[Entry], unplaced: list[Entry], cross_checked: bool, log
     from_clips = sum(e.source == CLIP for e in everything)
     if from_clips:
         log("Measured from a preview clip (least reliable, tempo only): {}.".format(from_clips))
+    typed_keys = sum(e.key_yours for e in everything)
+    if typed_keys:
+        log("Keys you entered: {}.".format(typed_keys))
+    no_key = sum(e.key is None for e in ordered)
+    if no_key:
+        log("No key known (placed by tempo alone): {}.".format(no_key))
 
     if paste:
         log("\n# Paste-ready order")
