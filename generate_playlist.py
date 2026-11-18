@@ -837,7 +837,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--spotify", "-sp", default="True",
                         help="Discover songs via Spotify title search")
     parser.add_argument("--genius", "-g", default="True",
-                        help="Also discover via Genius search (lyrics always use Genius)")
+                        help="Discover songs via Genius search (matches lyrics, not just titles)")
     parser.add_argument(
         "--spotifyPage", "-spp", default=0, type=int,
         help="Starting Spotify search offset (for resuming an interrupted run)",
